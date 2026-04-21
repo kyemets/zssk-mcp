@@ -1,4 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import AdmZip from "adm-zip";
@@ -14,7 +20,8 @@ import type { Agency } from "../entities/agency.js";
 
 // The ŽSR national feed covers every passenger-rail operator in Slovakia
 // (ZSSK, RegioJet, Leo Express, …), not just ZSSK.
-const FEED_URL = "https://www.zsr.sk/files/pre-cestujucich/cestovny-poriadok/gtfs/gtfs.zip";
+const FEED_URL =
+  "https://www.zsr.sk/files/pre-cestujucich/cestovny-poriadok/gtfs/gtfs.zip";
 
 // Anchor to the script location, not process.cwd: MCP hosts spawn this
 // binary with cwd="/", so a relative ".cache" path fails on mkdir.
@@ -31,20 +38,27 @@ type CsvRow = Record<string, string>;
 
 async function ensureZipDownloaded(forceRefresh: boolean): Promise<void> {
   if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
-  const stale = existsSync(ZIP_PATH) && Date.now() - statSync(ZIP_PATH).mtimeMs > CACHE_TTL_MS;
+  const stale =
+    existsSync(ZIP_PATH) &&
+    Date.now() - statSync(ZIP_PATH).mtimeMs > CACHE_TTL_MS;
   const needsDownload = forceRefresh || !existsSync(ZIP_PATH) || stale;
   if (!needsDownload) return;
 
   console.error(`[gtfs] downloading ${FEED_URL}`);
   const res = await fetch(FEED_URL);
-  if (!res.ok) throw new Error(`GTFS download failed: ${res.status} ${res.statusText}`);
+  if (!res.ok)
+    throw new Error(`GTFS download failed: ${res.status} ${res.statusText}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   writeFileSync(ZIP_PATH, buf);
 }
 
 function ensureExtracted(): void {
   const zipMtime = String(statSync(ZIP_PATH).mtimeMs);
-  if (existsSync(EXTRACT_MARKER) && readFileSync(EXTRACT_MARKER, "utf8") === zipMtime) return;
+  if (
+    existsSync(EXTRACT_MARKER) &&
+    readFileSync(EXTRACT_MARKER, "utf8") === zipMtime
+  )
+    return;
   console.error(`[gtfs] extracting to ${EXTRACT_DIR}`);
   new AdmZip(ZIP_PATH).extractAllTo(EXTRACT_DIR, true);
   writeFileSync(EXTRACT_MARKER, zipMtime);
@@ -52,12 +66,20 @@ function ensureExtracted(): void {
 
 function readCsv(filename: string): CsvRow[] {
   const raw = readFileSync(join(EXTRACT_DIR, filename), "utf8");
-  return parseCsv(raw, { columns: true, skip_empty_lines: true, trim: true, bom: true });
+  return parseCsv(raw, {
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    bom: true,
+  });
 }
 
 function required(row: CsvRow, field: string, file: string): string {
   const v = row[field];
-  if (!v) throw new Error(`Malformed ${file}: missing "${field}" in ${JSON.stringify(row)}`);
+  if (!v)
+    throw new Error(
+      `Malformed ${file}: missing "${field}" in ${JSON.stringify(row)}`,
+    );
   return v;
 }
 
@@ -83,10 +105,13 @@ function parseTrips(): Map<string, Trip> {
   const map = new Map<string, Trip>();
   for (const r of rows) {
     const tripId = required(r, "trip_id", "trips.txt");
-    const wheelchairRaw = r.wheelchair_accessible ? Number(r.wheelchair_accessible) : 0;
+    const wheelchairRaw = r.wheelchair_accessible
+      ? Number(r.wheelchair_accessible)
+      : 0;
     // GTFS values outside {0,1,2} are garbage — normalize to 0 ("no info")
     // rather than trusting arbitrary integers downstream.
-    const wheelchair = wheelchairRaw === 1 || wheelchairRaw === 2 ? wheelchairRaw : 0;
+    const wheelchair =
+      wheelchairRaw === 1 || wheelchairRaw === 2 ? wheelchairRaw : 0;
     map.set(tripId, {
       tripId,
       routeId: required(r, "route_id", "trips.txt"),
@@ -151,13 +176,20 @@ function parseStopTimes(): {
       departureTime: r.departure_time ?? "",
     };
     let tripBucket = byTrip.get(tripId);
-    if (!tripBucket) { tripBucket = []; byTrip.set(tripId, tripBucket); }
+    if (!tripBucket) {
+      tripBucket = [];
+      byTrip.set(tripId, tripBucket);
+    }
     tripBucket.push(st);
     let stopBucket = byStop.get(stopId);
-    if (!stopBucket) { stopBucket = []; byStop.set(stopId, stopBucket); }
+    if (!stopBucket) {
+      stopBucket = [];
+      byStop.set(stopId, stopBucket);
+    }
     stopBucket.push(st);
   }
-  for (const arr of byTrip.values()) arr.sort((a, b) => a.stopSequence - b.stopSequence);
+  for (const arr of byTrip.values())
+    arr.sort((a, b) => a.stopSequence - b.stopSequence);
   return { byTrip, byStop };
 }
 
@@ -169,10 +201,15 @@ function parseServices(): Map<string, Service> {
     const date = required(r, "date", "calendar_dates.txt");
     const type = Number(required(r, "exception_type", "calendar_dates.txt"));
     if (type !== 1 && type !== 2) {
-      throw new Error(`calendar_dates.txt: invalid exception_type=${type} for ${serviceId} on ${date}`);
+      throw new Error(
+        `calendar_dates.txt: invalid exception_type=${type} for ${serviceId} on ${date}`,
+      );
     }
     let inner = exceptionsByService.get(serviceId);
-    if (!inner) { inner = new Map(); exceptionsByService.set(serviceId, inner); }
+    if (!inner) {
+      inner = new Map();
+      exceptionsByService.set(serviceId, inner);
+    }
     inner.set(date, type);
   }
 
@@ -212,13 +249,21 @@ function parseServices(): Map<string, Service> {
   return services;
 }
 
-type FeedInfo = Readonly<{ version: string; startDate: string; endDate: string }>;
+type FeedInfo = Readonly<{
+  version: string;
+  startDate: string;
+  endDate: string;
+}>;
 
 function parseFeedInfo(): FeedInfo {
   const path = join(EXTRACT_DIR, "feed_info.txt");
-  if (!existsSync(path)) return { version: "unknown", startDate: "", endDate: "" };
+  if (!existsSync(path))
+    return { version: "unknown", startDate: "", endDate: "" };
   const rows = parseCsv(readFileSync(path, "utf8"), {
-    columns: true, skip_empty_lines: true, trim: true, bom: true,
+    columns: true,
+    skip_empty_lines: true,
+    trim: true,
+    bom: true,
   }) as CsvRow[];
   const row = rows[0] ?? {};
   return {
@@ -241,12 +286,15 @@ export async function loadGtfs(): Promise<GtfsIndex> {
   const servicesById = parseServices();
   const feedInfo = parseFeedInfo();
 
-  const stopTimeCount = Array.from(byTrip.values()).reduce((n, a) => n + a.length, 0);
+  const stopTimeCount = Array.from(byTrip.values()).reduce(
+    (n, a) => n + a.length,
+    0,
+  );
   console.error(
     `[gtfs] loaded: stops=${stopsById.size} trips=${tripsById.size} ` +
-    `routes=${routesById.size} agencies=${agenciesById.size} ` +
-    `stopTimes=${stopTimeCount} services=${servicesById.size} ` +
-    `feedVersion=${feedInfo.version} validity=${feedInfo.startDate}→${feedInfo.endDate}`,
+      `routes=${routesById.size} agencies=${agenciesById.size} ` +
+      `stopTimes=${stopTimeCount} services=${servicesById.size} ` +
+      `feedVersion=${feedInfo.version} validity=${feedInfo.startDate}→${feedInfo.endDate}`,
   );
 
   return {

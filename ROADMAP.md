@@ -1,61 +1,64 @@
 # zssk-mcp — roadmap
 
-Status after v0.4.0 (`feat/v0.4-ergonomics-extras`).
+Status after v0.5.0 (`feat/v0.5-integrations`).
 
 ---
 
-## ✅ Done in v4
+## ✅ Done in v5
 
-### `via` parameter
+### `get_feed_info` tool
 
-On `find_connection` and `find_connection_with_transfer`. For direct search
-the trip must visit `via` strictly between `from` and `to`. For transfer
-search the via may be the interchange or lie on either leg. Unknown `via`
-value returns `no_match` with `which: "via"` — no silent expansion.
+Mirror of the existing `zssk://feed/info` resource. Claude Code (and most
+MCP clients at the moment) don't expose `resources/read` to the agent as a
+callable surface, so the tool is the reliable way to get feed metadata
+programmatically. Same payload either way.
 
-### `arrive_by` parameter
+### Booking deep-links
 
-Same two tools accept an `arrive_by` (`HH:MM`) gate on the destination
-arrival time. Natural fit for "last train home by X" and "what can I
-catch if I must arrive by noon".
+Every connection / leg / trip result now carries a `booking` object:
 
-### `wheelchair_only` filter
+```
+{ provider: "ZSSK" | "RegioJet" | "Leo Express",
+  url: "https://...?from=...&to=...&date=...&time=...",
+  note: "Best-effort deep-link ..." }
+```
 
-Loaded `wheelchair_accessible` from `trips.txt` into a new
-`WheelchairAccessibility` field on the `Trip` entity. Applied as a filter
-on the four trip-returning tools (`find_connection`,
-`find_connection_with_transfer`, `get_timetable`, `find_trip_by_number`).
-Trips with unknown status (`0`) are excluded when the filter is on.
+Per-agency portal (ZSSK + Trezka → `ik.zssk.sk`, RegioJet → `regiojet.com`,
+Leo Express → `leoexpress.com`). Query params are best-effort hints; if the
+portal ignores them the user still lands on the right site. Documented as a
+hint, not a contract — fine for a pet project.
 
-### `date_out_of_range` status
+### `sort_by` parameter
 
-New explicit status on every date-taking tool when the requested date
-falls outside `feed_start_date..feed_end_date`. Replaces the earlier
-silent empty response that was easily misread as "no trains that day".
+On `find_connection` and `find_connection_with_transfer`:
+`earliest_departure` (default, unchanged behaviour), `earliest_arrival`,
+`shortest_trip`. Verified in smoke that `shortest_trip`'s first element has
+duration ≤ any other sort's first element.
 
-### MCP resource `zssk://feed/info`
+### International / border-crossing flag
 
-Static read-only resource published alongside the six tools. Returns
-`{ feedVersion, feedStartDate, feedEndDate, agencies, counts, warning }`.
-Client reads it once per session to get the feed's validity window
-without burning a tool call.
+Every connection / leg / trip now has `international: boolean` and
+`borderCountries: string[]` (ISO alpha-2). Detection uses a conservative
+hardcoded marker list of CZ / AT / HU / PL / UA / DE hub city names against
+stop names + headsign. Intentionally conservative — prefer missing a minor
+hop over false-positive on Slovak station names that partially match.
 
----
+### `search_stations` tool
 
-## ✅ Done in v3
+Browse-style station search. Returns all tiers (exact > prefix > substring)
+sorted by score then alphabetically. Fills the gap between
+`resolveStation` (ambiguous-tier only) and `find_stations_nearby`
+(requires coordinates). Diacritic-insensitive via the same
+`normalizeStationQuery` used everywhere else.
 
-- `find_trip_by_number` — full stop list for a named train.
-- `find_stations_nearby` — haversine proximity search.
-- `train_types` filter (Os / R / REX / Ex / IC / EC / RJ / LE).
-- `_feed_warning` field injected on tool responses ≤14 days from expiry.
-- MCP tool annotations (`readOnly`, non-destructive, idempotent, closed-world).
+### `export_connection_as_ics` tool
 
-## ✅ Done in v2
-
-- `find_connection_with_transfer` — single-transfer itineraries.
-- `operator` filter with alias table (ZSSK / RJ / LE / Trezka).
-- License confirmed as CC0-1.0.
-- Smoke: structural floor on dataset sizes + tight alias-leak regression.
+RFC-5545 VCALENDAR/VEVENT output for a `trip_id + date`. Embeds
+`TZID=Europe/Bratislava`, includes the full stop list in the description.
+Handles GTFS post-midnight times (≥ 24:00) by bumping the calendar date
+and wrapping the hour, so `25:30 Košice` on 2026-04-21 becomes a valid
+`20260422T013000` end time. Returns `trip_not_found`, `not_running`, or
+`date_out_of_range` on the respective error paths.
 
 ---
 
@@ -63,27 +66,25 @@ without burning a tool call.
 
 ### #1 Real-time delays
 
-Same blocker as v2/v3 — requires a source decision (scrape
+Unchanged since v2. Requires a source decision (scrape
 `zssk.sk/aktualna-poloha-vlakov` vs third-party aggregator vs wait for
 GTFS-RT). `check_delay` remains a stub.
 
-### Ticket prices / fares
+### Ticket prices
 
-Investigated in v4 — dead-end for a clean implementation. Feed has no
-GTFS-Fares data; ZSSK's booking API requires auth; scraping breaks the
-"no scraping" rule and misses promos/discounts (error ±30–50 %).
-Intentionally not adding an `estimate_price` tool that would silently
-hallucinate numbers. If you want it, the realistic option is a static
-TR-201 tariff table with an explicit `_estimate_warning` on every
-response — ~1 day of work, pending a go-ahead.
+Dead-end for a clean implementation (see v4 notes). ZSSK has no GTFS-Fares
+data, booking API needs auth, scraping breaks the no-scraping rule and
+misses promos/discounts (error ±30–50 %). The v5 booking deep-links are
+the honest compromise: point the user at the right portal, let the portal
+quote the real price.
 
 ---
 
 ## Explicitly still out of scope
 
 - Multi-transfer (2+ changes) routing.
-- Ticket booking, fares, seat selection (see above).
+- Ticket booking automation (price quote, seat selection, payment).
 - Web UI / dashboard.
 - Docker.
-- A full test framework — smoke test plus `tsc --noEmit` is enough.
+- A full test framework — smoke + `tsc --noEmit` is enough.
 - A database.

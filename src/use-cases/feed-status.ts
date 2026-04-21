@@ -12,13 +12,20 @@ export type FeedWarning = Readonly<{
   feedEndDate: string;
 }>;
 
-export function getFeedWarning(gtfs: GtfsIndex, today: Date = new Date()): FeedWarning | null {
+export function getFeedWarning(
+  gtfs: GtfsIndex,
+  today: Date = new Date(),
+): FeedWarning | null {
   if (!gtfs.feedEndDate || !/^\d{8}$/.test(gtfs.feedEndDate)) return null;
   const endYear = Number(gtfs.feedEndDate.slice(0, 4));
   const endMonth = Number(gtfs.feedEndDate.slice(4, 6));
   const endDay = Number(gtfs.feedEndDate.slice(6, 8));
   const endMs = Date.UTC(endYear, endMonth - 1, endDay);
-  const todayMs = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const todayMs = Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth(),
+    today.getUTCDate(),
+  );
   const daysRemaining = Math.floor((endMs - todayMs) / (24 * 60 * 60 * 1000));
 
   if (daysRemaining < 0) {
@@ -52,17 +59,26 @@ export type FeedInfoSnapshot = Readonly<{
   feedStartDate: string;
   feedEndDate: string;
   agencies: ReadonlyArray<{ agencyId: string; agencyName: string }>;
-  counts: Readonly<{ stops: number; trips: number; routes: number; services: number; stopTimes: number }>;
+  counts: Readonly<{
+    stops: number;
+    trips: number;
+    routes: number;
+    services: number;
+    stopTimes: number;
+  }>;
   warning: FeedWarning | null;
 }>;
 
 export function buildFeedInfo(gtfs: GtfsIndex): FeedInfoSnapshot {
-  const stopTimes = Array.from(gtfs.stopTimesByTrip.values()).reduce((n, a) => n + a.length, 0);
+  const stopTimes = Array.from(gtfs.stopTimesByTrip.values()).reduce(
+    (n, a) => n + a.length,
+    0,
+  );
   return {
     feedVersion: gtfs.feedVersion,
     feedStartDate: gtfs.feedStartDate,
     feedEndDate: gtfs.feedEndDate,
-    agencies: Array.from(gtfs.agenciesById.values()).map(a => ({
+    agencies: Array.from(gtfs.agenciesById.values()).map((a) => ({
       agencyId: a.agencyId,
       agencyName: a.agencyName,
     })),

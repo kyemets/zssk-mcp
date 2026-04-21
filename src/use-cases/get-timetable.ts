@@ -1,7 +1,11 @@
 import type { GtfsIndex } from "../entities/gtfs-index.js";
 import { resolveStation } from "./resolve-station.js";
 import { resolveAgencies } from "./resolve-agency.js";
-import { serviceRunsOn, toGtfsDate, checkDateInRange } from "./service-calendar.js";
+import {
+  serviceRunsOn,
+  toGtfsDate,
+  checkDateInRange,
+} from "./service-calendar.js";
 import { matchesTrainTypes, normalizeTrainTypes } from "./train-category.js";
 
 export type GetTimetableInput = Readonly<{
@@ -28,13 +32,33 @@ export type Departure = Readonly<{
 type StationCandidate = Readonly<{ stopId: string; stopName: string }>;
 
 export type GetTimetableResult =
-  | Readonly<{ status: "ok"; station: string; date: string; departures: ReadonlyArray<Departure> }>
-  | Readonly<{ status: "ambiguous"; candidates: ReadonlyArray<StationCandidate> }>
+  | Readonly<{
+      status: "ok";
+      station: string;
+      date: string;
+      departures: ReadonlyArray<Departure>;
+    }>
+  | Readonly<{
+      status: "ambiguous";
+      candidates: ReadonlyArray<StationCandidate>;
+    }>
   | Readonly<{ status: "no_match" }>
-  | Readonly<{ status: "no_match_operator"; operator: string; available: ReadonlyArray<string> }>
-  | Readonly<{ status: "date_out_of_range"; date: string; feedStartDate: string; feedEndDate: string }>;
+  | Readonly<{
+      status: "no_match_operator";
+      operator: string;
+      available: ReadonlyArray<string>;
+    }>
+  | Readonly<{
+      status: "date_out_of_range";
+      date: string;
+      feedStartDate: string;
+      feedEndDate: string;
+    }>;
 
-export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTimetableResult {
+export function getTimetable(
+  gtfs: GtfsIndex,
+  input: GetTimetableInput,
+): GetTimetableResult {
   const dateCheck = checkDateInRange(gtfs, input.date);
   if (!dateCheck.ok) {
     return {
@@ -50,7 +74,10 @@ export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTime
   if (match.kind === "ambiguous") {
     return {
       status: "ambiguous",
-      candidates: match.candidates.map(s => ({ stopId: s.stopId, stopName: s.stopName })),
+      candidates: match.candidates.map((s) => ({
+        stopId: s.stopId,
+        stopName: s.stopName,
+      })),
     };
   }
 
@@ -59,7 +86,9 @@ export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTime
     return {
       status: "no_match_operator",
       operator: input.operator ?? "",
-      available: Array.from(gtfs.agenciesById.values()).map(a => a.agencyName),
+      available: Array.from(gtfs.agenciesById.values()).map(
+        (a) => a.agencyName,
+      ),
     };
   }
 
@@ -81,11 +110,18 @@ export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTime
     if (lastStop && st.stopSequence === lastStop.stopSequence) continue;
 
     const route = gtfs.routesById.get(trip.routeId);
-    if (allowedAgencyIds && !(route && allowedAgencyIds.has(route.agencyId))) continue;
+    if (allowedAgencyIds && !(route && allowedAgencyIds.has(route.agencyId)))
+      continue;
     if (!matchesTrainTypes(route, allowedTypes)) continue;
 
-    const trainNumber = (route?.shortName || trip.shortName || trip.tripId).trim();
-    const agencyName = route ? (gtfs.agenciesById.get(route.agencyId)?.agencyName ?? "") : "";
+    const trainNumber = (
+      route?.shortName ||
+      trip.shortName ||
+      trip.tripId
+    ).trim();
+    const agencyName = route
+      ? (gtfs.agenciesById.get(route.agencyId)?.agencyName ?? "")
+      : "";
 
     departures.push({
       tripId: trip.tripId,
@@ -118,5 +154,5 @@ function resolveOperator(
   if (!operator) return null;
   const match = resolveAgencies(operator, gtfs.agenciesById);
   if (match.kind === "none") return "no_match";
-  return new Set(match.agencies.map(a => a.agencyId));
+  return new Set(match.agencies.map((a) => a.agencyId));
 }
