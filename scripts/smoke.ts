@@ -13,6 +13,10 @@ import { exportIcs } from "../src/use-cases/export-ics.js";
 import { renderTripRoute } from "../src/use-cases/render-trip-route.js";
 import { renderServiceCalendar } from "../src/use-cases/render-service-calendar.js";
 import { renderTimetableChart } from "../src/use-cases/render-timetable-chart.js";
+import { nextDeparturesFrom } from "../src/use-cases/next-departures-from.js";
+import { getTripGeojson } from "../src/use-cases/get-trip-geojson.js";
+import { compareTrips } from "../src/use-cases/compare-trips.js";
+import { findReachableStations } from "../src/use-cases/find-reachable-stations.js";
 import { getTimetable } from "../src/use-cases/get-timetable.js";
 import { checkDelay } from "../src/use-cases/check-delay.js";
 import { resolveAgencies } from "../src/use-cases/resolve-agency.js";
@@ -685,6 +689,98 @@ async function main(): Promise<void> {
   assert(hourLines.length >= 24, `chart should have 24 hour rows, got ${hourLines.length}`);
   console.log(chart.chart.split("\n").slice(0, 14).join("\n"));
   console.log("  …");
+
+  // === v0.7: next_departures_from ===
+  console.log(`\n=== next_departures_from (Žilina, now) ===`);
+  const upcoming = nextDeparturesFrom(gtfs, { station: "Žilina", limit: 5 });
+  if (upcoming.status === "ok") {
+    assert(upcoming.departures.length >= 1, `next_departures_from returned nothing`);
+    assert(typeof upcoming.now === "string" && /^\d{2}:\d{2}$/.test(upcoming.now), `now not HH:MM`);
+    // All returned departures must be ≥ "now".
+    for (const dep of upcoming.departures) {
+      assert(dep.departureTime >= upcoming.now, `next_departures leaked past departure: ${dep.departureTime} < ${upcoming.now}`);
+    }
+    console.log(`now=${upcoming.now}, first=${upcoming.departures[0]?.trainNumber} @ ${upcoming.departures[0]?.departureTime}`);
+  } else if (upcoming.status === "date_out_of_range") {
+    // Running the smoke on a date outside the feed window is a known edge
+    // case — don't fail the whole script, just note it.
+    console.log("  date_out_of_range (expected if run off-feed)");
+  } else {
+    assert(false, `unexpected status: ${upcoming.status}`);
+  }
+
+  // === v0.7: get_trip_geojson ===
+  console.log(`\n=== get_trip_geojson (Ex 603 trip) ===`);
+  const geo = getTripGeojson(gtfs, { tripId: trip0.tripId, date: weekday });
+  assert(geo.status === "ok", `get_trip_geojson status: ${geo.status}`);
+  assert(geo.feature.type === "Feature", `not a GeoJSON Feature`);
+  assert(geo.feature.geometry.type === "LineString", `not a LineString`);
+  assert(geo.feature.geometry.coordinates.length >= 2, `LineString needs ≥2 points`);
+  // Every coordinate should be [lon, lat] in sensible ranges for Slovakia.
+  for (const [lon, lat] of geo.feature.geometry.coordinates) {
+    assert(lon > 16 && lon < 23, `lon out of SK range: ${lon}`);
+    assert(lat > 47 && lat < 50, `lat out of SK range: ${lat}`);
+  }
+  console.log(`  Feature with ${geo.feature.geometry.coordinates.length} points, skipped=${geo.skippedStops}`);
+
+  // === v0.7: compare_trips ===
+  console.log(`\n=== compare_trips (two Ex direct BA→KE) ===`);
+  const ba2ke = direct.connections.slice(0, 2).map(c => c.tripId);
+  assert(ba2ke.length === 2, `expected 2 trip ids for comparison, got ${ba2ke.length}`);
+  const cmp = compareTrips(gtfs, { tripIds: ba2ke, date: weekday });
+  assert(cmp.status === "ok", `compare_trips status: ${cmp.status}`);
+  assert(cmp.trips.length === 2, `expected 2 comparison rows, got ${cmp.trips.length}`);
+  const bothOk = cmp.trips.every(t => t.status === "ok");
+  assert(bothOk, `at least one compared trip didn't resolve`);
+  console.log(`  ${cmp.trips.map(t => t.status === "ok" ? `${t.trainNumber} ${t.durationMinutes}m` : t.status).join(" vs ")}`);
+
+  // Too few, too many, bad ids — error paths.
+  const tooFew = compareTrips(gtfs, { tripIds: ["1"], date: weekday });
+  assert(tooFew.status === "too_few_trips", `expected too_few_trips, got ${tooFew.status}`);
+  const tooMany = compareTrips(gtfs, { tripIds: ["1", "2", "3", "4", "5", "6"], date: weekday });
+  assert(tooMany.status === "too_many_trips", `expected too_many_trips, got ${tooMany.status}`);
+  const mixed = compareTrips(gtfs, { tripIds: [trip0.tripId, "99999999"], date: weekday });
+  assert(mixed.status === "ok", `mixed trip_ids should still return ok`);
+  const notFound = mixed.trips.find(t => t.status === "trip_not_found");
+  assert(notFound !== undefined, `expected one trip_not_found row`);
+
+  // === v0.7: find_reachable_stations ===
+  console.log(`\n=== find_reachable_stations (Bratislava hl.st., ±90 min, direct) ===`);
+  const reachDirect = findReachableStations(gtfs, {
+    from: "Bratislava hl.st.",
+    date: weekday,
+    departureAfter: "06:00",
+    withinMinutes: 90,
+    maxTransfers: 0,
+  });
+  assert(reachDirect.status === "ok", `reach status: ${reachDirect.status}`);
+  assert(reachDirect.stations.length > 5, `expected ≥5 reachable in 90 min, got ${reachDirect.stations.length}`);
+  // Results must be sorted by duration ascending.
+  for (let i = 1; i < reachDirect.stations.length; i++) {
+    const prev = reachDirect.stations[i - 1];
+    const curr = reachDirect.stations[i];
+    assert(prev !== undefined && curr !== undefined, "pair");
+    assert(curr.durationMinutes >= prev.durationMinutes, `reach not sorted at ${i}`);
+  }
+  // All direct-only results should have viaTransfer=null.
+  const leakedTransfer = reachDirect.stations.find(s => s.viaTransfer !== null);
+  assert(leakedTransfer === undefined, `direct-only leaked transfer: ${leakedTransfer?.viaTransfer ?? ""}`);
+  console.log(`  ${reachDirect.stations.length} stations within 90 min (direct)`);
+
+  console.log(`\n=== find_reachable_stations (±180 min, 1 transfer) ===`);
+  const reachWithTransfer = findReachableStations(gtfs, {
+    from: "Bratislava hl.st.",
+    date: weekday,
+    departureAfter: "06:00",
+    withinMinutes: 180,
+    maxTransfers: 1,
+  });
+  assert(reachWithTransfer.status === "ok", `reach+1 status: ${reachWithTransfer.status}`);
+  assert(
+    reachWithTransfer.stations.length >= reachDirect.stations.length,
+    `max_transfers=1 should reach at least as many stations as direct`,
+  );
+  console.log(`  ${reachWithTransfer.stations.length} stations within 180 min (up to 1 transfer)`);
 
   // === operator error path ===
   const bogus = findConnection(

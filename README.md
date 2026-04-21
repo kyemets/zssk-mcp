@@ -67,6 +67,10 @@ This is a personal pet project — no production infra, no real-time delays in v
 | `render_trip_route`             | ASCII timeline of a trip's stops (fixed-width, chat-renderable).             | v6      |
 | `render_service_calendar`       | Monthly grid showing which days a train runs.                                | v6      |
 | `render_timetable_chart`        | Hourly histogram of station departures.                                      | v6      |
+| `next_departures_from`          | "Now" wrapper — next N departures from a station in Europe/Bratislava time.  | v7      |
+| `get_trip_geojson`              | GeoJSON Feature (LineString) of a trip's path for map rendering.             | v7      |
+| `compare_trips`                 | Side-by-side comparison of 2–5 trips on one date.                            | v7      |
+| `find_reachable_stations`       | Stations reachable within N minutes (direct, optionally with 1 transfer).    | v7      |
 | `check_delay`                   | Real-time delay lookup. Returns `not_implemented` — pending source decision. | v1 stub |
 
 All query tools are marked `readOnly`, non-destructive, idempotent, and
@@ -133,6 +137,25 @@ tool just to get the feed's validity window.
 The same payload is also exposed as a **`get_feed_info` tool** (v5) — some
 MCP clients (including Claude Code) don't surface resources as callable
 endpoints to the agent, so the tool mirror is the reliable path.
+
+### Reachability and maps (v7)
+
+- **`next_departures_from(station, limit)`** — thin convenience over
+  `get_timetable`: today in Europe/Bratislava, current HH:MM as the lower
+  bound. `"Что сейчас с Жилины?"` in one call.
+- **`get_trip_geojson(trip_id, date)`** — RFC-7946 GeoJSON `Feature` with a
+  `LineString` geometry built from the trip's stop coordinates. Drop into
+  Leaflet / Mapbox / any map client. Stops without coordinates are skipped
+  and reported in `skippedStops` so the caller knows the line is partial.
+- **`compare_trips([trip_id_a, trip_id_b, ...], date)`** — 2–5 trips
+  side-by-side with full metadata (duration, stops, operator, badges,
+  booking link). Deliberately doesn't rank — LLM sees the numbers and
+  decides.
+- **`find_reachable_stations(from, date, departure_after, within_minutes, max_transfers)`** —
+  every station you can reach on this date within `within_minutes` of
+  travel. `max_transfers=0` (default) = direct trains only;
+  `max_transfers=1` = allow one 5-min-minimum change at any intermediate
+  hub. Sorted by shortest total duration, capped at 200 results.
 
 ### Visual rendering (v6)
 
@@ -451,7 +474,11 @@ src/
     badges.ts                      (v6: compact indicators for results)
     render-trip-route.ts           (v6: ASCII route timeline)
     render-service-calendar.ts     (v6: monthly run-day grid)
-    render-timetable-chart.ts      (v6: hourly departure histogram)
+    render-timetable-chart.ts     (v6: hourly departure histogram)
+    next-departures-from.ts        (v7: "now" wrapper, Europe/Bratislava TZ)
+    get-trip-geojson.ts            (v7: GeoJSON LineString for maps)
+    compare-trips.ts               (v7: 2–5 trips side-by-side)
+    find-reachable-stations.ts     (v7: direct + 1-transfer BFS)
     find-connection.ts
     find-connection-with-transfer.ts
     find-trip-by-number.ts
