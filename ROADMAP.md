@@ -1,64 +1,78 @@
 # zssk-mcp — roadmap
 
-Status after v0.5.0 (`feat/v0.5-integrations`).
+Status after v0.6.0 (`feat/v0.6-visuals`).
 
 ---
 
-## ✅ Done in v5
+## ✅ Done in v6
 
-### `get_feed_info` tool
+### Visual rendering tools
 
-Mirror of the existing `zssk://feed/info` resource. Claude Code (and most
-MCP clients at the moment) don't expose `resources/read` to the agent as a
-callable surface, so the tool is the reliable way to get feed metadata
-programmatically. Same payload either way.
+Three fixed-width ASCII renderers that produce chat-ready text. Unicode
+kept minimal — `●` / `·` / `│` / `─` / `→`, plus `♿` / `⇄` where they
+carry real meaning. No emoji cascade.
 
-### Booking deep-links
+- **`render_trip_route(trip_id, date)`** — vertical timeline of one
+  trip's stops. Header with train number + route + date, meta line with
+  duration / agency / accessibility / cross-border info, one stop per
+  line with a ● marker and │ connector. Preserves a structured
+  `summary` alongside the rendered string.
+- **`render_service_calendar(train_number, month)`** — Mo–Su month grid
+  with ● on days the train runs, · on days it doesn't, `_` on days
+  outside the feed's validity window. Covers the natural "does Ex 603
+  run on Sundays?" question without a date-per-date probe.
+- **`render_timetable_chart(station, date)`** — 24-hour histogram of
+  departures from a station. Each row `HH ●●●● (N)`. Skips terminus
+  rows. Keeps GTFS post-midnight buckets (24+) so the rhythm reflects
+  actual same-service-day operations.
 
-Every connection / leg / trip result now carries a `booking` object:
+### Badges
 
-```
-{ provider: "ZSSK" | "RegioJet" | "Leo Express",
-  url: "https://...?from=...&to=...&date=...&time=...",
-  note: "Best-effort deep-link ..." }
-```
+Every `Connection` / `Leg` / `TripDetails` gains a `badges: Badge[]`
+field. Each badge is `{ kind, symbol, label }`:
 
-Per-agency portal (ZSSK + Trezka → `ik.zssk.sk`, RegioJet → `regiojet.com`,
-Leo Express → `leoexpress.com`). Query params are best-effort hints; if the
-portal ignores them the user still lands on the right site. Documented as a
-hint, not a contract — fine for a pet project.
+- `accessibility` · `♿` — trip has `wheelchair_accessible=1`.
+- `international` · `⇄` — border-crossing, with country codes in label.
+- `express` · `»` — route category Ex / IC / EC.
+- `private_operator` · `»` — RJ / LE.
+- `regional` · `·` — Os / R / REX.
 
-### `sort_by` parameter
+Clients without icon support can render from `kind` + `label`; the
+symbol is a hint, never the only information carrier.
 
-On `find_connection` and `find_connection_with_transfer`:
-`earliest_departure` (default, unchanged behaviour), `earliest_arrival`,
-`shortest_trip`. Verified in smoke that `shortest_trip`'s first element has
-duration ≤ any other sort's first element.
+---
 
-### International / border-crossing flag
+## ✅ Done earlier
 
-Every connection / leg / trip now has `international: boolean` and
-`borderCountries: string[]` (ISO alpha-2). Detection uses a conservative
-hardcoded marker list of CZ / AT / HU / PL / UA / DE hub city names against
-stop names + headsign. Intentionally conservative — prefer missing a minor
-hop over false-positive on Slovak station names that partially match.
+### v5 — integrations
 
-### `search_stations` tool
+- `get_feed_info` tool (resource mirror for Claude Code).
+- Per-operator booking deep-links (`ik.zssk.sk`, RegioJet, Leo Express).
+- `sort_by` on search tools (`earliest_departure` / `earliest_arrival` /
+  `shortest_trip`).
+- `international` + `borderCountries` on every result.
+- `search_stations` autocomplete tool.
+- `export_connection_as_ics` with RFC-5545 output, post-midnight
+  time handling.
 
-Browse-style station search. Returns all tiers (exact > prefix > substring)
-sorted by score then alphabetically. Fills the gap between
-`resolveStation` (ambiguous-tier only) and `find_stations_nearby`
-(requires coordinates). Diacritic-insensitive via the same
-`normalizeStationQuery` used everywhere else.
+### v4 — ergonomics extras
 
-### `export_connection_as_ics` tool
+- `via` + `arrive_by` + `wheelchair_only` filters.
+- `date_out_of_range` status on every date-taking tool.
+- Static `zssk://feed/info` MCP resource.
 
-RFC-5545 VCALENDAR/VEVENT output for a `trip_id + date`. Embeds
-`TZID=Europe/Bratislava`, includes the full stop list in the description.
-Handles GTFS post-midnight times (≥ 24:00) by bumping the calendar date
-and wrapping the hour, so `25:30 Košice` on 2026-04-21 becomes a valid
-`20260422T013000` end time. Returns `trip_not_found`, `not_running`, or
-`date_out_of_range` on the respective error paths.
+### v3
+
+- `find_trip_by_number`, `find_stations_nearby`.
+- `train_types` filter.
+- `_feed_warning` field near feed expiry.
+- MCP tool annotations (readOnly / non-destructive / idempotent / closed-world).
+
+### v2
+
+- `find_connection_with_transfer` (single-transfer itineraries).
+- `operator` filter with alias table.
+- License confirmed as CC0-1.0.
 
 ---
 
@@ -66,25 +80,20 @@ and wrapping the hour, so `25:30 Košice` on 2026-04-21 becomes a valid
 
 ### #1 Real-time delays
 
-Unchanged since v2. Requires a source decision (scrape
-`zssk.sk/aktualna-poloha-vlakov` vs third-party aggregator vs wait for
-GTFS-RT). `check_delay` remains a stub.
+Unchanged. Source decision still required. `check_delay` remains a stub.
 
 ### Ticket prices
 
-Dead-end for a clean implementation (see v4 notes). ZSSK has no GTFS-Fares
-data, booking API needs auth, scraping breaks the no-scraping rule and
-misses promos/discounts (error ±30–50 %). The v5 booking deep-links are
-the honest compromise: point the user at the right portal, let the portal
-quote the real price.
+Dead-end for a clean implementation — see v4/v5 notes. Booking
+deep-links in v5 are the honest compromise.
 
 ---
 
 ## Explicitly still out of scope
 
 - Multi-transfer (2+ changes) routing.
-- Ticket booking automation (price quote, seat selection, payment).
-- Web UI / dashboard.
+- Ticket booking automation.
+- Web UI.
 - Docker.
-- A full test framework — smoke + `tsc --noEmit` is enough.
+- A full test framework.
 - A database.

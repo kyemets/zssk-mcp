@@ -1,6 +1,6 @@
 {
   "name": "zssk-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server exposing Slovak Railways (ZSSK/ŽSR) GTFS timetable data.",
   "private": true,
   "type": "module",

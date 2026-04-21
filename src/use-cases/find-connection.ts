@@ -14,6 +14,7 @@ import {
   detectBorderCrossing,
   type BorderCrossing,
 } from "./border-crossing.js";
+import { buildBadges, type Badge } from "./badges.js";
 
 export type SortBy =
   | "earliest_departure"
@@ -49,6 +50,7 @@ export type Connection = Readonly<{
   international: boolean;
   borderCountries: ReadonlyArray<string>;
   booking: BookingLink;
+  badges: ReadonlyArray<Badge>;
 }>;
 
 type StationCandidate = Readonly<{ stopId: string; stopName: string }>;
@@ -224,6 +226,12 @@ export function findConnection(
       international: border.international,
       borderCountries: border.countries,
       booking,
+      badges: buildBadges({
+        wheelchairAccessible: trip.wheelchairAccessible,
+        international: border.international,
+        borderCountries: border.countries,
+        trainNumber,
+      }),
     });
   }
 

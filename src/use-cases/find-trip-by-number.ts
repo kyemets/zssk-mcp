@@ -7,6 +7,7 @@ import {
 } from "./service-calendar.js";
 import { buildBookingLink, type BookingLink } from "./booking-link.js";
 import { detectBorderCrossing } from "./border-crossing.js";
+import { buildBadges, type Badge } from "./badges.js";
 
 export type FindTripByNumberInput = Readonly<{
   trainNumber: string;
@@ -38,6 +39,7 @@ export type TripDetails = Readonly<{
   international: boolean;
   borderCountries: ReadonlyArray<string>;
   booking: BookingLink;
+  badges: ReadonlyArray<Badge>;
   stops: ReadonlyArray<StopVisit>;
 }>;
 
@@ -127,6 +129,12 @@ export function findTripByNumber(
       international: border.international,
       borderCountries: border.countries,
       booking,
+      badges: buildBadges({
+        wheelchairAccessible: trip.wheelchairAccessible,
+        international: border.international,
+        borderCountries: border.countries,
+        trainNumber: (route?.shortName || trip.shortName || trip.tripId).trim(),
+      }),
       stops: stopTimes.map((st) => {
         const station = gtfs.stopsById.get(st.stopId);
         return {
