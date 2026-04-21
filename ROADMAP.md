@@ -1,78 +1,71 @@
 # zssk-mcp — roadmap
 
-Status after v0.6.0 (`feat/v0.6-visuals`).
+Status after v0.7.0 (`feat/v0.7-reach-and-geo`).
 
 ---
 
-## ✅ Done in v6
+## ✅ Done in v7
 
-### Visual rendering tools
+### `next_departures_from(station, limit)`
 
-Three fixed-width ASCII renderers that produce chat-ready text. Unicode
-kept minimal — `●` / `·` / `│` / `─` / `→`, plus `♿` / `⇄` where they
-carry real meaning. No emoji cascade.
+Convenience wrapper around `get_timetable`. Resolves "today" and "now" in
+Europe/Bratislava via `Intl.DateTimeFormat` (host-timezone-agnostic), then
+filters out already-departed trains. Covers the very common "what's next
+at Žilina?" ask in a single tool call.
 
-- **`render_trip_route(trip_id, date)`** — vertical timeline of one
-  trip's stops. Header with train number + route + date, meta line with
-  duration / agency / accessibility / cross-border info, one stop per
-  line with a ● marker and │ connector. Preserves a structured
-  `summary` alongside the rendered string.
-- **`render_service_calendar(train_number, month)`** — Mo–Su month grid
-  with ● on days the train runs, · on days it doesn't, `_` on days
-  outside the feed's validity window. Covers the natural "does Ex 603
-  run on Sundays?" question without a date-per-date probe.
-- **`render_timetable_chart(station, date)`** — 24-hour histogram of
-  departures from a station. Each row `HH ●●●● (N)`. Skips terminus
-  rows. Keeps GTFS post-midnight buckets (24+) so the rhythm reflects
-  actual same-service-day operations.
+### `get_trip_geojson(trip_id, date)`
 
-### Badges
+Emit an RFC-7946 GeoJSON `Feature` with a `LineString` geometry built
+from the trip's stop coordinates (`[lon, lat]` per spec). Any map-capable
+client (Leaflet, Mapbox, Obsidian) can drop it onto a layer to draw the
+route. Stops with unknown coords (lat=0 && lon=0 in the feed) are
+skipped and reported in `skippedStops`.
 
-Every `Connection` / `Leg` / `TripDetails` gains a `badges: Badge[]`
-field. Each badge is `{ kind, symbol, label }`:
+### `compare_trips([trip_id_a, trip_id_b, ...], date)`
 
-- `accessibility` · `♿` — trip has `wheelchair_accessible=1`.
-- `international` · `⇄` — border-crossing, with country codes in label.
-- `express` · `»` — route category Ex / IC / EC.
-- `private_operator` · `»` — RJ / LE.
-- `regional` · `·` — Os / R / REX.
+2–5 trip_ids, one date, side-by-side enriched metadata per trip. Each
+row carries the same fields we already expose elsewhere (train number,
+duration, stops, agency, wheelchair, international, booking, badges).
+A trip that doesn't resolve or doesn't run comes back as its own
+`trip_not_found` / `not_running` row without aborting the whole query.
+Deliberately does **not** rank — no "winner" field.
 
-Clients without icon support can render from `kind` + `label`; the
-symbol is a hint, never the only information carrier.
+### `find_reachable_stations(from, date, departure_after, within_minutes, max_transfers)`
+
+Direct-default reachability search. For `max_transfers=0` (default),
+walks every departure from `from` and follows each trip's stops until
+the running time exceeds `within_minutes`. For `max_transfers=1`, also
+explores one interchange per intermediate with a 5-minute minimum wait.
+Returns up to 200 stations sorted by shortest total duration, each with
+an `arrivalTime` and (for transfers) `viaTransfer` station name.
+
+Smoke verified on real data: **74 stations reachable from Bratislava
+hl.st. within 90 min direct; 147 stations within 180 min allowing one
+transfer**.
 
 ---
 
 ## ✅ Done earlier
 
-### v5 — integrations
+### v6 — visual rendering
+- `render_trip_route`, `render_service_calendar`, `render_timetable_chart`.
+- Unified `badges: Badge[]` on all trip results.
 
-- `get_feed_info` tool (resource mirror for Claude Code).
-- Per-operator booking deep-links (`ik.zssk.sk`, RegioJet, Leo Express).
-- `sort_by` on search tools (`earliest_departure` / `earliest_arrival` /
-  `shortest_trip`).
-- `international` + `borderCountries` on every result.
-- `search_stations` autocomplete tool.
-- `export_connection_as_ics` with RFC-5545 output, post-midnight
-  time handling.
+### v5 — integrations
+- Booking deep-links, `sort_by`, `international`, `search_stations`,
+  `export_connection_as_ics`, `get_feed_info`.
 
 ### v4 — ergonomics extras
-
-- `via` + `arrive_by` + `wheelchair_only` filters.
-- `date_out_of_range` status on every date-taking tool.
-- Static `zssk://feed/info` MCP resource.
+- `via`, `arrive_by`, `wheelchair_only`, `date_out_of_range`,
+  `zssk://feed/info` resource.
 
 ### v3
-
-- `find_trip_by_number`, `find_stations_nearby`.
-- `train_types` filter.
-- `_feed_warning` field near feed expiry.
-- MCP tool annotations (readOnly / non-destructive / idempotent / closed-world).
+- `find_trip_by_number`, `find_stations_nearby`, `train_types`,
+  feed-expiry warning, tool annotations.
 
 ### v2
-
-- `find_connection_with_transfer` (single-transfer itineraries).
-- `operator` filter with alias table.
-- License confirmed as CC0-1.0.
+- `find_connection_with_transfer`, `operator` filter, CC0-1.0 license
+  confirmed.
 
 ---
 
@@ -84,16 +77,17 @@ Unchanged. Source decision still required. `check_delay` remains a stub.
 
 ### Ticket prices
 
-Dead-end for a clean implementation — see v4/v5 notes. Booking
-deep-links in v5 are the honest compromise.
+Booking deep-links (v5) are the honest compromise. Not revisiting.
 
 ---
 
 ## Explicitly still out of scope
 
-- Multi-transfer (2+ changes) routing.
+- Multi-transfer (2+ changes) routing — `max_transfers: 2` would add
+  combinatorial blowup for marginal coverage gain; 1-transfer already
+  covers most realistic trips in Slovakia.
 - Ticket booking automation.
-- Web UI.
-- Docker.
+- Web UI / dashboard.
+- Docker / k8s.
 - A full test framework.
 - A database.

@@ -12,6 +12,10 @@ import { exportIcs } from "../use-cases/export-ics.js";
 import { renderTripRoute } from "../use-cases/render-trip-route.js";
 import { renderServiceCalendar } from "../use-cases/render-service-calendar.js";
 import { renderTimetableChart } from "../use-cases/render-timetable-chart.js";
+import { nextDeparturesFrom } from "../use-cases/next-departures-from.js";
+import { getTripGeojson } from "../use-cases/get-trip-geojson.js";
+import { compareTrips } from "../use-cases/compare-trips.js";
+import { findReachableStations } from "../use-cases/find-reachable-stations.js";
 import { getTimetable } from "../use-cases/get-timetable.js";
 import { checkDelay } from "../use-cases/check-delay.js";
 import { getFeedWarning, buildFeedInfo } from "../use-cases/feed-status.js";
@@ -64,7 +68,7 @@ const READ_ONLY_ANNOTATIONS = {
 } as const;
 
 export function createMcpServer(gtfs: GtfsIndex): McpServer {
-  const server = new McpServer({ name: "zssk-mcp", version: "0.6.0" });
+  const server = new McpServer({ name: "zssk-mcp", version: "0.7.0" });
 
   server.registerTool(
     "find_connection",
@@ -438,6 +442,91 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
     async (args) => respond(gtfs, renderTimetableChart(gtfs, {
       station: args.station,
       date: args.date,
+    })),
+  );
+
+  server.registerTool(
+    "next_departures_from",
+    {
+      title: "Next departures from a station (right now)",
+      description:
+        "Convenience wrapper over get_timetable. Uses 'now' in Europe/Bratislava to " +
+        "pick today's date and the current HH:MM, then returns the next `limit` " +
+        "departures from a fuzzy-matched station. Useful for 'what's next at Žilina?'.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        station: z.string().min(1).describe("Station name (fuzzy matched)."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max rows. Default 10."),
+      },
+    },
+    async (args) => respond(gtfs, nextDeparturesFrom(gtfs, {
+      station: args.station,
+      limit: args.limit ?? 10,
+    })),
+  );
+
+  server.registerTool(
+    "get_trip_geojson",
+    {
+      title: "Trip path as GeoJSON",
+      description:
+        "Return an RFC-7946 GeoJSON Feature with a LineString geometry tracing the " +
+        "trip's stop coordinates (lon/lat). Stops missing coordinates in the feed " +
+        "are skipped and reported in `skippedStops`. Drop the `feature` object into " +
+        "any Leaflet/Mapbox/etc layer to draw the route on a map.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        trip_id: z.string().min(1).describe("GTFS trip_id (from a prior connection/trip result)."),
+        date: z.string().regex(DATE_REGEX).describe("Service date YYYY-MM-DD."),
+      },
+    },
+    async (args) => respond(gtfs, getTripGeojson(gtfs, { tripId: args.trip_id, date: args.date })),
+  );
+
+  server.registerTool(
+    "compare_trips",
+    {
+      title: "Side-by-side comparison of 2-5 trips",
+      description:
+        "Take 2 to 5 trip_ids and one date, return a structured array with the full " +
+        "metadata per trip (train number, duration, stops, operator, accessibility, " +
+        "international flag, booking link, badges). Individual trips can come back " +
+        "as `trip_not_found` or `not_running` without aborting the whole comparison. " +
+        "Does NOT rank — returns numbers, leaves the judgment to the caller.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        trip_ids: z.array(z.string().min(1)).min(2).max(5).describe("Between 2 and 5 GTFS trip_ids."),
+        date: z.string().regex(DATE_REGEX).describe("Service date YYYY-MM-DD."),
+      },
+    },
+    async (args) => respond(gtfs, compareTrips(gtfs, { tripIds: args.trip_ids, date: args.date })),
+  );
+
+  server.registerTool(
+    "find_reachable_stations",
+    {
+      title: "Stations reachable within N minutes",
+      description:
+        "Return every station reachable from `from` on `date` starting after " +
+        "`departure_after`, with total travel time ≤ `within_minutes`. Direct-only " +
+        "by default (`max_transfers=0`); set `max_transfers=1` to include one " +
+        "interchange (5-min minimum wait). Results sorted by shortest duration, " +
+        "capped at 200 stations.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        from: z.string().min(1).describe("Departure station name (fuzzy matched)."),
+        date: z.string().regex(DATE_REGEX).describe("Date YYYY-MM-DD."),
+        departure_after: z.string().regex(TIME_REGEX).optional().describe("Earliest departure HH:MM (24h). Default 00:00."),
+        within_minutes: z.number().int().min(10).max(480).optional().describe("Travel-time budget in minutes. Default 120, max 480 (8h)."),
+        max_transfers: z.union([z.literal(0), z.literal(1)]).optional().describe("0 = direct only (default), 1 = allow one change."),
+      },
+    },
+    async (args) => respond(gtfs, findReachableStations(gtfs, {
+      from: args.from,
+      date: args.date,
+      departureAfter: args.departure_after ?? "00:00",
+      withinMinutes: args.within_minutes ?? 120,
+      maxTransfers: args.max_transfers ?? 0,
     })),
   );
 
