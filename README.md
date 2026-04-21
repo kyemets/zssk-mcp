@@ -54,12 +54,18 @@ This is a personal pet project — no production infra, no real-time delays in v
 
 ## Tools exposed
 
-| Tool                             | Purpose                                                                   | Status     |
-|----------------------------------|---------------------------------------------------------------------------|------------|
-| `find_connection`                | **Direct** train connections between two stations on a given date.        | v1         |
-| `find_connection_with_transfer`  | Two-leg train connections via a single transfer (5 min ≤ wait ≤ 180 min). | v2         |
-| `get_timetable`                  | Departures from a station on a given date.                                | v1         |
-| `check_delay`                    | Real-time delay lookup. Returns `not_implemented` — planned for v2.       | v1 (stub)  |
+| Tool                             | Purpose                                                                      | Since   |
+|----------------------------------|------------------------------------------------------------------------------|---------|
+| `find_connection`                | **Direct** train connections between two stations on a given date.           | v1      |
+| `find_connection_with_transfer`  | Two-leg train connections via a single transfer (5 min ≤ wait ≤ 180 min).    | v2      |
+| `get_timetable`                  | Departures from a station on a given date.                                   | v1      |
+| `find_trip_by_number`            | Full stop list for a train identified by human number (`Ex 603`, `R 681`).   | v3      |
+| `find_stations_nearby`           | Stations within a radius of a lat/lon, sorted by distance (haversine).       | v3      |
+| `check_delay`                    | Real-time delay lookup. Returns `not_implemented` — pending source decision. | v1 stub |
+
+All query tools are marked `readOnly`, non-destructive, idempotent, and
+closed-world via MCP tool annotations, so clients can route them through
+automated pipelines without extra confirmations.
 
 ### Operator filter (v2)
 
@@ -68,6 +74,22 @@ accept an optional `operator` argument. Accepted values: agency-name
 substrings (e.g. `RegioJet`, `Leo Express`) or short codes (`ZSSK`, `RJ`,
 `LE`, `Trezka`). Unknown values return a `no_match_operator` response with
 the list of available agencies, rather than silently returning nothing.
+
+### Train-type filter (v3)
+
+Same three search tools accept an optional `train_types: string[]` argument.
+Values are case-insensitive ZSSK categories: `Os` (local), `R` (rýchlik),
+`REX` (regional express), `Ex` (expres), `IC`, `EC`, plus private carriers
+`RJ` (RegioJet), `LE` (Leo Express). Category is parsed from
+`route_short_name` (first token). Omit or pass `[]` to include all categories.
+
+### Feed-expiry warning (v3)
+
+Tool responses gain a `_feed_warning` field when the GTFS feed's
+`feed_end_date` is within 14 days (`severity: "warning"`) or already past
+(`severity: "expired"`). The field is omitted when there is nothing to flag.
+Refresh with `ZSSK_GTFS_REFRESH=1` ahead of the December grafikon
+switchover.
 
 ### Station matching
 
@@ -82,10 +104,10 @@ instead of guessing.
 The ŽSR feed does not include per-trip platform data. When `stops.txt`
 carries a `platform_code` it's returned; otherwise `platformCode` is `null`.
 
-### Out of scope for v1
+### Still out of scope
 
-- Real-time delays / GTFS-RT
-- Transfers and multi-leg routing
+- Real-time delays / GTFS-RT (tracked as #1 in `ROADMAP.md`)
+- Multi-transfer routing (2+ changes)
 - Ticket booking, fares, seat selection
 
 ---
@@ -292,8 +314,12 @@ src/
     resolve-station.ts
     resolve-agency.ts
     service-calendar.ts
+    train-category.ts
+    feed-status.ts
     find-connection.ts
     find-connection-with-transfer.ts
+    find-trip-by-number.ts
+    find-stations-nearby.ts
     get-timetable.ts
     check-delay.ts
   adapters/         external-world concerns

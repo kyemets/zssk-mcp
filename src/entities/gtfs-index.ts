@@ -16,4 +16,6 @@ export type GtfsIndex = Readonly<{
   stopTimesByStop: ReadonlyMap<string, ReadonlyArray<StopTime>>;
   servicesById: ReadonlyMap<string, Service>;
   feedVersion: string;
+  feedStartDate: string;
+  feedEndDate: string;
 }>;
