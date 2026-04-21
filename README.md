@@ -64,6 +64,9 @@ This is a personal pet project — no production infra, no real-time delays in v
 | `search_stations`               | Autocomplete-style station search by name (ranked exact > prefix > substr).  | v5      |
 | `export_connection_as_ics`      | Return an RFC-5545 iCal (.ics) event for a trip_id + date.                   | v5      |
 | `get_feed_info`                 | Feed metadata tool (mirror of the `zssk://feed/info` resource).              | v5      |
+| `render_trip_route`             | ASCII timeline of a trip's stops (fixed-width, chat-renderable).             | v6      |
+| `render_service_calendar`       | Monthly grid showing which days a train runs.                                | v6      |
+| `render_timetable_chart`        | Hourly histogram of station departures.                                      | v6      |
 | `check_delay`                   | Real-time delay lookup. Returns `not_implemented` — pending source decision. | v1 stub |
 
 All query tools are marked `readOnly`, non-destructive, idempotent, and
@@ -130,6 +133,61 @@ tool just to get the feed's validity window.
 The same payload is also exposed as a **`get_feed_info` tool** (v5) — some
 MCP clients (including Claude Code) don't surface resources as callable
 endpoints to the agent, so the tool mirror is the reliable path.
+
+### Visual rendering (v6)
+
+The three `render_*` tools return fixed-width text blocks you can drop
+straight into a chat message. Unicode is kept minimal (`●`, `·`, `│`,
+`─`, `→`, plus `♿` / `⇄` where semantically relevant) — no emoji cascade.
+
+**`render_trip_route(trip_id, date)`** — a trip's full stop list as a
+vertical timeline:
+
+```
+Ex 603 TATRAN · Bratislava hl.st. → Košice · 2026-04-21
+duration 5 h 38 min · 17 stops · ZSSK · ♿ accessible
+
+04:15  ● Bratislava hl.st.
+       │
+04:20  ● Bratislava-Vinohrady
+       │
+...
+09:53  ● Košice
+```
+
+**`render_service_calendar(train_number, month)`** — month grid showing
+which days a train runs:
+
+```
+April 2026
+Mo Tu We Th Fr Sa Su
+       ●  ●  ●  ●  ●
+ ●  ●  ●  ●  ●  ●  ●
+ ●  ●  ●  ●  ●  ●  ●
+ ●  ●  ●  ●  ●  ●  ●
+ ●  ●  ●  ●
+```
+
+**`render_timetable_chart(station, date)`** — hourly histogram of
+departures from a station:
+
+```
+Žilina · 2026-04-21 · 156 departures
+
+05 ●●●●●●●●● (9)
+06 ●●●●●●●●● (9)
+07 ●●●●●●●●● (9)
+...
+```
+
+### Badges (v6)
+
+Every connection / leg / trip now carries a `badges` array — compact,
+client-renderable indicators with a machine `kind`, a single-char
+`symbol`, and a human `label`. Currently emitted: `accessibility` (♿),
+`international` (⇄ with country codes), `express` (», for Ex/IC/EC),
+`private_operator` (», for RJ/LE), `regional` (·, for Os/R/REX). Safe to
+ignore if the client doesn't render indicators.
 
 ### sort_by, booking deep-links, international (v5)
 
@@ -390,6 +448,10 @@ src/
     border-crossing.ts             (v5: CZ/AT/HU/PL/UA/DE detection)
     search-stations.ts             (v5: browse-style station search)
     export-ics.ts                  (v5: RFC-5545 VEVENT generator)
+    badges.ts                      (v6: compact indicators for results)
+    render-trip-route.ts           (v6: ASCII route timeline)
+    render-service-calendar.ts     (v6: monthly run-day grid)
+    render-timetable-chart.ts      (v6: hourly departure histogram)
     find-connection.ts
     find-connection-with-transfer.ts
     find-trip-by-number.ts

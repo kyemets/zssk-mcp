@@ -13,6 +13,7 @@ import {
 import { matchesTrainTypes, normalizeTrainTypes } from "./train-category.js";
 import { buildBookingLink, type BookingLink } from "./booking-link.js";
 import { detectBorderCrossing } from "./border-crossing.js";
+import { buildBadges, type Badge } from "./badges.js";
 import type { SortBy } from "./find-connection.js";
 
 export type FindTransferInput = Readonly<{
@@ -41,6 +42,7 @@ export type Leg = Readonly<{
   durationMinutes: number;
   wheelchairAccessible: 0 | 1 | 2;
   booking: BookingLink;
+  badges: ReadonlyArray<Badge>;
 }>;
 
 export type Itinerary = Readonly<{
@@ -378,6 +380,10 @@ function makeLeg(
       to: toName,
       date,
       departureTime: dep.departureTime.slice(0, 5),
+    }),
+    badges: buildBadges({
+      wheelchairAccessible: trip.wheelchairAccessible,
+      trainNumber,
     }),
   };
 }

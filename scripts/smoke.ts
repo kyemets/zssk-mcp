@@ -10,6 +10,9 @@ import { findTripByNumber } from "../src/use-cases/find-trip-by-number.js";
 import { findStationsNearby } from "../src/use-cases/find-stations-nearby.js";
 import { searchStations } from "../src/use-cases/search-stations.js";
 import { exportIcs } from "../src/use-cases/export-ics.js";
+import { renderTripRoute } from "../src/use-cases/render-trip-route.js";
+import { renderServiceCalendar } from "../src/use-cases/render-service-calendar.js";
+import { renderTimetableChart } from "../src/use-cases/render-timetable-chart.js";
 import { getTimetable } from "../src/use-cases/get-timetable.js";
 import { checkDelay } from "../src/use-cases/check-delay.js";
 import { resolveAgencies } from "../src/use-cases/resolve-agency.js";
@@ -632,6 +635,56 @@ async function main(): Promise<void> {
   // === check_delay (stub) ===
   const delay = checkDelay({ trainNumber: "Ex 42" });
   assert(delay.status === "not_implemented", `check_delay should be stubbed`);
+
+  // === v0.6: badges present on enriched results ===
+  assert(Array.isArray(first.badges), `connection.badges missing`);
+  // Ex 603 is an express, so at minimum we expect an express badge.
+  const hasExpressBadge = first.badges.some(b => b.kind === "express");
+  assert(hasExpressBadge, `expected Express badge on Ex 603, got [${first.badges.map(b => b.kind).join(",")}]`);
+
+  // === v0.6: render_trip_route ===
+  console.log(`\n=== render_trip_route  (Ex 603 trip, ${weekday}) ===`);
+  const rendered = renderTripRoute(gtfs, { tripId: trip0.tripId, date: weekday });
+  assert(rendered.status === "ok", `render_trip_route status: ${rendered.status}`);
+  assert(rendered.route.includes("●"), `route missing stop marker`);
+  assert(rendered.route.includes("│"), `route missing connector`);
+  assert(rendered.route.includes("→"), `header missing arrow`);
+  assert(rendered.route.includes("Bratislava hl.st."), `route missing origin`);
+  assert(rendered.route.includes("Košice"), `route missing destination`);
+  assert(rendered.summary.stops >= 10, `summary.stops=${rendered.summary.stops}`);
+  console.log(rendered.route.split("\n").slice(0, 6).join("\n"));
+  console.log("  … (truncated)");
+
+  const unknownTripRender = renderTripRoute(gtfs, { tripId: "99999999", date: weekday });
+  assert(unknownTripRender.status === "trip_not_found", `expected trip_not_found, got ${unknownTripRender.status}`);
+
+  // === v0.6: render_service_calendar ===
+  const month = `${weekday.slice(0, 7)}`;
+  console.log(`\n=== render_service_calendar  (Ex 603, ${month}) ===`);
+  const cal = renderServiceCalendar(gtfs, { trainNumber: "Ex 603", month });
+  assert(cal.status === "ok", `render_service_calendar status: ${cal.status}`);
+  assert(cal.calendar.includes("Mo Tu We Th Fr Sa Su"), `calendar missing header row`);
+  assert(cal.calendar.includes("●"), `calendar missing runs glyph`);
+  assert(cal.totalRunningDays > 0, `Ex 603 should run on some days in ${month}`);
+  console.log(cal.calendar);
+
+  const badMonth = renderServiceCalendar(gtfs, { trainNumber: "Ex 603", month: "2026-13" });
+  assert(badMonth.status === "invalid_month", `expected invalid_month, got ${badMonth.status}`);
+
+  const unknownTrain = renderServiceCalendar(gtfs, { trainNumber: "XX 99999", month });
+  assert(unknownTrain.status === "no_match", `expected no_match, got ${unknownTrain.status}`);
+
+  // === v0.6: render_timetable_chart ===
+  console.log(`\n=== render_timetable_chart  (Žilina, ${weekday}) ===`);
+  const chart = renderTimetableChart(gtfs, { station: "Žilina", date: weekday });
+  assert(chart.status === "ok", `render_timetable_chart status: ${chart.status}`);
+  assert(chart.chart.includes("●"), `chart missing bar glyph`);
+  assert(chart.totalDepartures > 10, `Žilina should have > 10 departures, got ${chart.totalDepartures}`);
+  // Chart contains 24 hour buckets at minimum.
+  const hourLines = chart.chart.split("\n").filter(l => /^\d{2} /.test(l));
+  assert(hourLines.length >= 24, `chart should have 24 hour rows, got ${hourLines.length}`);
+  console.log(chart.chart.split("\n").slice(0, 14).join("\n"));
+  console.log("  …");
 
   // === operator error path ===
   const bogus = findConnection(

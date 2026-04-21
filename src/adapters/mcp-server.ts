@@ -9,6 +9,9 @@ import { findTripByNumber } from "../use-cases/find-trip-by-number.js";
 import { findStationsNearby } from "../use-cases/find-stations-nearby.js";
 import { searchStations } from "../use-cases/search-stations.js";
 import { exportIcs } from "../use-cases/export-ics.js";
+import { renderTripRoute } from "../use-cases/render-trip-route.js";
+import { renderServiceCalendar } from "../use-cases/render-service-calendar.js";
+import { renderTimetableChart } from "../use-cases/render-timetable-chart.js";
 import { getTimetable } from "../use-cases/get-timetable.js";
 import { checkDelay } from "../use-cases/check-delay.js";
 import { getFeedWarning, buildFeedInfo } from "../use-cases/feed-status.js";
@@ -61,7 +64,7 @@ const READ_ONLY_ANNOTATIONS = {
 } as const;
 
 export function createMcpServer(gtfs: GtfsIndex): McpServer {
-  const server = new McpServer({ name: "zssk-mcp", version: "0.5.0" });
+  const server = new McpServer({ name: "zssk-mcp", version: "0.6.0" });
 
   server.registerTool(
     "find_connection",
@@ -368,6 +371,74 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
       inputSchema: {},
     },
     async () => respond(gtfs, buildFeedInfo(gtfs)),
+  );
+
+  server.registerTool(
+    "render_trip_route",
+    {
+      title: "ASCII timeline of a trip's stops",
+      description:
+        "Return a multi-line fixed-width block showing the full stop list of a trip: " +
+        "header line with train number/route/date, meta line with duration and badges, " +
+        "then one line per stop with time and a ● marker connected by │. Intended for " +
+        "direct rendering in a chat message. Structured `summary` preserved alongside.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        trip_id: z
+          .string()
+          .min(1)
+          .describe("The GTFS trip_id (from a find_connection / find_trip_by_number result)."),
+        date: z.string().regex(DATE_REGEX).describe("Service date YYYY-MM-DD."),
+      },
+    },
+    async (args) => respond(gtfs, renderTripRoute(gtfs, { tripId: args.trip_id, date: args.date })),
+  );
+
+  server.registerTool(
+    "render_service_calendar",
+    {
+      title: "Monthly calendar of when a train runs",
+      description:
+        "Render a month grid (Mo–Su columns, weeks as rows) marking each day with ● if " +
+        "the train runs or · if not. Matches train number against route_short_name / " +
+        "trip_short_name. Handy to ask 'does Ex 603 run on Sundays?' at a glance.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        train_number: z
+          .string()
+          .min(1)
+          .describe("Human train number, e.g. 'Ex 603', 'R 681', 'RJ 1046'."),
+        month: z
+          .string()
+          .regex(/^\d{4}-\d{2}$/)
+          .describe("Month as YYYY-MM, e.g. '2026-04'."),
+      },
+    },
+    async (args) => respond(gtfs, renderServiceCalendar(gtfs, {
+      trainNumber: args.train_number,
+      month: args.month,
+    })),
+  );
+
+  server.registerTool(
+    "render_timetable_chart",
+    {
+      title: "Hourly histogram of station departures",
+      description:
+        "Visualize the density of departures from a station across 24 hours as a " +
+        "fixed-width chart (`HH ●●●●● (N)`). Skips terminus rows (pure arrivals). " +
+        "Post-midnight GTFS times (>= 24:00) keep their bucket so the chart reflects " +
+        "actual same-service-day operations.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        station: z.string().min(1).describe("Station name (fuzzy matched)."),
+        date: z.string().regex(DATE_REGEX).describe("Date YYYY-MM-DD."),
+      },
+    },
+    async (args) => respond(gtfs, renderTimetableChart(gtfs, {
+      station: args.station,
+      date: args.date,
+    })),
   );
 
   server.registerTool(
