@@ -22,7 +22,11 @@ export function matchesTrainTypes(
   return cat !== null && allowedLower.has(cat.toLowerCase());
 }
 
-export function normalizeTrainTypes(types: ReadonlyArray<string> | null): ReadonlySet<string> | null {
+export function normalizeTrainTypes(
+  types: ReadonlyArray<string> | null,
+): ReadonlySet<string> | null {
   if (!types || types.length === 0) return null;
-  return new Set(types.map(t => t.trim().toLowerCase()).filter(t => t.length > 0));
+  return new Set(
+    types.map((t) => t.trim().toLowerCase()).filter((t) => t.length > 0),
+  );
 }

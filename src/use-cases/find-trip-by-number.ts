@@ -1,5 +1,12 @@
 import type { GtfsIndex } from "../entities/gtfs-index.js";
-import { serviceRunsOn, toGtfsDate, checkDateInRange } from "./service-calendar.js";
+import {
+  serviceRunsOn,
+  toGtfsDate,
+  checkDateInRange,
+  toMinutesGtfs,
+} from "./service-calendar.js";
+import { buildBookingLink, type BookingLink } from "./booking-link.js";
+import { detectBorderCrossing } from "./border-crossing.js";
 
 export type FindTripByNumberInput = Readonly<{
   trainNumber: string;
@@ -26,19 +33,33 @@ export type TripDetails = Readonly<{
   toStop: string;
   departureTime: string;
   arrivalTime: string;
+  durationMinutes: number;
   wheelchairAccessible: 0 | 1 | 2;
+  international: boolean;
+  borderCountries: ReadonlyArray<string>;
+  booking: BookingLink;
   stops: ReadonlyArray<StopVisit>;
 }>;
 
 export type FindTripByNumberResult =
-  | Readonly<{ status: "ok"; trainNumber: string; date: string; trips: ReadonlyArray<TripDetails> }>
+  | Readonly<{
+      status: "ok";
+      trainNumber: string;
+      date: string;
+      trips: ReadonlyArray<TripDetails>;
+    }>
   | Readonly<{ status: "no_match"; trainNumber: string; date: string }>
-  | Readonly<{ status: "date_out_of_range"; date: string; feedStartDate: string; feedEndDate: string }>;
+  | Readonly<{
+      status: "date_out_of_range";
+      date: string;
+      feedStartDate: string;
+      feedEndDate: string;
+    }>;
 
-// Match train number against both `route.short_name` ("Ex 603") and
-// `trip.short_name` ("603") so humans can type either form. Case and
-// whitespace are normalized; diacritics are not present in this field.
-export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput): FindTripByNumberResult {
+export function findTripByNumber(
+  gtfs: GtfsIndex,
+  input: FindTripByNumberInput,
+): FindTripByNumberResult {
   const dateCheck = checkDateInRange(gtfs, input.date);
   if (!dateCheck.ok) {
     return {
@@ -50,7 +71,12 @@ export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput):
   }
 
   const query = normalizeNumber(input.trainNumber);
-  if (!query) return { status: "no_match", trainNumber: input.trainNumber, date: input.date };
+  if (!query)
+    return {
+      status: "no_match",
+      trainNumber: input.trainNumber,
+      date: input.date,
+    };
 
   const gtfsDate = toGtfsDate(input.date);
   const matches: TripDetails[] = [];
@@ -70,7 +96,19 @@ export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput):
     const lastStop = stopTimes[stopTimes.length - 1];
     if (!firstStop || !lastStop) continue;
 
-    const agencyName = route ? (gtfs.agenciesById.get(route.agencyId)?.agencyName ?? "") : "";
+    const agency = route ? gtfs.agenciesById.get(route.agencyId) : undefined;
+    const agencyName = agency?.agencyName ?? "";
+    const fromName =
+      gtfs.stopsById.get(firstStop.stopId)?.stopName ?? firstStop.stopId;
+    const toName =
+      gtfs.stopsById.get(lastStop.stopId)?.stopName ?? lastStop.stopId;
+    const border = detectBorderCrossing(stopTimes, trip.headsign, gtfs);
+    const booking = buildBookingLink(agency, {
+      from: fromName,
+      to: toName,
+      date: input.date,
+      departureTime: firstStop.departureTime.slice(0, 5),
+    });
 
     matches.push({
       tripId: trip.tripId,
@@ -78,12 +116,18 @@ export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput):
       trainName: route?.longName ? route.longName : null,
       agency: agencyName,
       headsign: trip.headsign,
-      fromStop: gtfs.stopsById.get(firstStop.stopId)?.stopName ?? firstStop.stopId,
-      toStop: gtfs.stopsById.get(lastStop.stopId)?.stopName ?? lastStop.stopId,
+      fromStop: fromName,
+      toStop: toName,
       departureTime: firstStop.departureTime.slice(0, 5),
       arrivalTime: lastStop.arrivalTime.slice(0, 5),
+      durationMinutes:
+        toMinutesGtfs(lastStop.arrivalTime) -
+        toMinutesGtfs(firstStop.departureTime),
       wheelchairAccessible: trip.wheelchairAccessible,
-      stops: stopTimes.map(st => {
+      international: border.international,
+      borderCountries: border.countries,
+      booking,
+      stops: stopTimes.map((st) => {
         const station = gtfs.stopsById.get(st.stopId);
         return {
           stopSequence: st.stopSequence,
@@ -98,7 +142,11 @@ export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput):
   }
 
   if (matches.length === 0) {
-    return { status: "no_match", trainNumber: input.trainNumber, date: input.date };
+    return {
+      status: "no_match",
+      trainNumber: input.trainNumber,
+      date: input.date,
+    };
   }
   matches.sort((a, b) => a.departureTime.localeCompare(b.departureTime));
   return {

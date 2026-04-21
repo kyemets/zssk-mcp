@@ -15,7 +15,12 @@ export type NearbyStation = Readonly<{
 }>;
 
 export type FindStationsNearbyResult =
-  | Readonly<{ status: "ok"; center: Readonly<{ lat: number; lon: number }>; radiusKm: number; stations: ReadonlyArray<NearbyStation> }>
+  | Readonly<{
+      status: "ok";
+      center: Readonly<{ lat: number; lon: number }>;
+      radiusKm: number;
+      stations: ReadonlyArray<NearbyStation>;
+    }>
   | Readonly<{ status: "invalid_coordinates"; reason: string }>;
 
 const MAX_RESULTS = 50;
@@ -25,13 +30,22 @@ export function findStationsNearby(
   input: FindStationsNearbyInput,
 ): FindStationsNearbyResult {
   if (!Number.isFinite(input.lat) || input.lat < -90 || input.lat > 90) {
-    return { status: "invalid_coordinates", reason: `lat out of range: ${input.lat}` };
+    return {
+      status: "invalid_coordinates",
+      reason: `lat out of range: ${input.lat}`,
+    };
   }
   if (!Number.isFinite(input.lon) || input.lon < -180 || input.lon > 180) {
-    return { status: "invalid_coordinates", reason: `lon out of range: ${input.lon}` };
+    return {
+      status: "invalid_coordinates",
+      reason: `lon out of range: ${input.lon}`,
+    };
   }
   if (!Number.isFinite(input.radiusKm) || input.radiusKm <= 0) {
-    return { status: "invalid_coordinates", reason: `radiusKm must be > 0: ${input.radiusKm}` };
+    return {
+      status: "invalid_coordinates",
+      reason: `radiusKm must be > 0: ${input.radiusKm}`,
+    };
   }
 
   const hits: NearbyStation[] = [];
@@ -39,7 +53,12 @@ export function findStationsNearby(
     // The loader defaults empty lat/lon to 0 — skip those rather than match
     // every query at the gulf of guinea.
     if (station.stopLat === 0 && station.stopLon === 0) continue;
-    const distance = haversineKm(input.lat, input.lon, station.stopLat, station.stopLon);
+    const distance = haversineKm(
+      input.lat,
+      input.lon,
+      station.stopLat,
+      station.stopLon,
+    );
     if (distance > input.radiusKm) continue;
     hits.push({
       stopId: station.stopId,
@@ -61,7 +80,12 @@ export function findStationsNearby(
 
 // Standard haversine in km — earth mean radius 6371 km. Accurate enough for
 // < 100 km queries; we don't need Vincenty-level precision here.
-function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+function haversineKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
   const R = 6371;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);

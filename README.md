@@ -54,14 +54,17 @@ This is a personal pet project — no production infra, no real-time delays in v
 
 ## Tools exposed
 
-| Tool                             | Purpose                                                                      | Since   |
-|----------------------------------|------------------------------------------------------------------------------|---------|
-| `find_connection`                | **Direct** train connections between two stations on a given date.           | v1      |
-| `find_connection_with_transfer`  | Two-leg train connections via a single transfer (5 min ≤ wait ≤ 180 min).    | v2      |
-| `get_timetable`                  | Departures from a station on a given date.                                   | v1      |
-| `find_trip_by_number`            | Full stop list for a train identified by human number (`Ex 603`, `R 681`).   | v3      |
-| `find_stations_nearby`           | Stations within a radius of a lat/lon, sorted by distance (haversine).       | v3      |
-| `check_delay`                    | Real-time delay lookup. Returns `not_implemented` — pending source decision. | v1 stub |
+| Tool                            | Purpose                                                                      | Since   |
+| ------------------------------- | ---------------------------------------------------------------------------- | ------- |
+| `find_connection`               | **Direct** train connections between two stations on a given date.           | v1      |
+| `find_connection_with_transfer` | Two-leg train connections via a single transfer (5 min ≤ wait ≤ 180 min).    | v2      |
+| `get_timetable`                 | Departures from a station on a given date.                                   | v1      |
+| `find_trip_by_number`           | Full stop list for a train identified by human number (`Ex 603`, `R 681`).   | v3      |
+| `find_stations_nearby`          | Stations within a radius of a lat/lon, sorted by distance (haversine).       | v3      |
+| `search_stations`               | Autocomplete-style station search by name (ranked exact > prefix > substr).  | v5      |
+| `export_connection_as_ics`      | Return an RFC-5545 iCal (.ics) event for a trip_id + date.                   | v5      |
+| `get_feed_info`                 | Feed metadata tool (mirror of the `zssk://feed/info` resource).              | v5      |
+| `check_delay`                   | Real-time delay lookup. Returns `not_implemented` — pending source decision. | v1 stub |
 
 All query tools are marked `readOnly`, non-destructive, idempotent, and
 closed-world via MCP tool annotations, so clients can route them through
@@ -123,6 +126,34 @@ The server publishes a static MCP **resource** at `zssk://feed/info` with
 `{ feedVersion, feedStartDate, feedEndDate, agencies, counts, warning }`.
 A client can read it once per session for context instead of calling a
 tool just to get the feed's validity window.
+
+The same payload is also exposed as a **`get_feed_info` tool** (v5) — some
+MCP clients (including Claude Code) don't surface resources as callable
+endpoints to the agent, so the tool mirror is the reliable path.
+
+### sort_by, booking deep-links, international (v5)
+
+- **`sort_by`** on `find_connection` and `find_connection_with_transfer`:
+  `"earliest_departure"` (default), `"earliest_arrival"` (when you actually
+  arrive), or `"shortest_trip"` (total travel time).
+- Every connection / leg / trip result now carries a **`booking`** object
+  with `{ provider, url, note }`. The URL is a best-effort deep-link into
+  the operator's booking portal (`ik.zssk.sk` for ZSSK/Trezka, RegioJet
+  for RJ, Leo Express for LE) with `from`, `to`, `date`, `time` query
+  params. If the portal ignores them, the user still lands on the right
+  site and fills the form manually.
+- Every result also carries **`international: boolean`** and
+  **`borderCountries: string[]`** (ISO 3166-1 alpha-2), detected by a
+  conservative substring match on stop names / headsign against a
+  hardcoded list of CZ / AT / HU / PL / UA / DE hub cities. Only
+  cross-border services flip the flag.
+- New tool **`search_stations(query, limit)`** — browse candidates
+  explicitly (useful before picking a `from`/`to`/`via`). Ranked
+  exact > prefix > substring, diacritic-insensitive.
+- New tool **`export_connection_as_ics(trip_id, date)`** — returns an
+  RFC-5545 VEVENT with `DTSTART;TZID=Europe/Bratislava:…`, full stop
+  list in the description. Handles GTFS post-midnight times (≥ 24:00)
+  by bumping the calendar date.
 
 ### Station matching
 
@@ -260,9 +291,9 @@ Add an entry to your `claude_desktop_config.json` (macOS path:
   "mcpServers": {
     "zssk": {
       "command": "node",
-      "args": ["/absolute/path/to/zssk-mcp/dist/main.js"]
-    }
-  }
+      "args": ["/absolute/path/to/zssk-mcp/dist/main.js"],
+    },
+  },
 }
 ```
 
@@ -274,9 +305,9 @@ development setup using `tsx` without a build step:
   "mcpServers": {
     "zssk": {
       "command": "npx",
-      "args": ["-y", "tsx", "/absolute/path/to/zssk-mcp/src/main.ts"]
-    }
-  }
+      "args": ["-y", "tsx", "/absolute/path/to/zssk-mcp/src/main.ts"],
+    },
+  },
 }
 ```
 
@@ -298,31 +329,37 @@ multiple MCP servers could match, nudge it with the server name (`"through
 zssk…"`).
 
 **Station timetable (`get_timetable`)**
+
 > Show departures from Žilina tomorrow, limit 10.
 >
 > What leaves Bratislava hl.st. today after 18:00?
 
 **Direct trains (`find_connection`)**
+
 > Find a train from Bratislava hl.st. to Košice tomorrow morning.
 >
 > Is there an overnight train Bratislava hl.st. → Humenné tonight?
 
 **Operator filter**
+
 > Any RegioJet from Žilina to Praha on Friday?
 >
 > Leo Express departures from Bratislava hl.st. tomorrow.
 
 **Transfer routing (`find_connection_with_transfer`)**
+
 > How do I get from Skalité to Štrba on Saturday? (no direct train — expect a transfer, usually via Žilina)
 >
 > Route with one transfer: Trenčín → Humenné tomorrow.
 
 **Fuzzy / diacritic-insensitive matching**
+
 > Departures from Zilina tomorrow. (resolves to `Žilina`)
 >
 > Find a train Kosice → Presov today.
 
 **Error paths worth seeing**
+
 > Find a train from Bratislava to Košice. (no `hl.st.` → `status: "ambiguous"` with candidates)
 >
 > Trains by operator "Flixtrain" from Bratislava hl.st. (→ `no_match_operator` with the agency list)
@@ -346,14 +383,18 @@ src/
   use-cases/        pure logic over a GtfsIndex
     resolve-station.ts
     resolve-agency.ts
-    service-calendar.ts            (+ date-range check)
+    service-calendar.ts            (+ date-range check, toMinutesGtfs)
     train-category.ts
-    feed-status.ts                 (warning + buildFeedInfo for resource)
-    find-connection.ts             (+ via, arrive_by, wheelchair_only)
-    find-connection-with-transfer.ts   (+ via, arrive_by, wheelchair_only)
-    find-trip-by-number.ts         (+ wheelchair_only)
+    feed-status.ts                 (warning + buildFeedInfo)
+    booking-link.ts                (v5: per-operator deep-link builder)
+    border-crossing.ts             (v5: CZ/AT/HU/PL/UA/DE detection)
+    search-stations.ts             (v5: browse-style station search)
+    export-ics.ts                  (v5: RFC-5545 VEVENT generator)
+    find-connection.ts
+    find-connection-with-transfer.ts
+    find-trip-by-number.ts
     find-stations-nearby.ts
-    get-timetable.ts               (+ wheelchair_only)
+    get-timetable.ts
     check-delay.ts
   adapters/         external-world concerns
     gtfs-loader.ts  (download + cache + parse)

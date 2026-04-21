@@ -37,10 +37,14 @@ export function resolveAgencies(
   if (hits.length > 0) return { kind: "matched", agencies: hits };
   return {
     kind: "none",
-    available: Array.from(agencies.values()).map(a => a.agencyName),
+    available: Array.from(agencies.values()).map((a) => a.agencyName),
   };
 }
 
 function normalize(s: string): string {
-  return s.normalize("NFKD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim();
+  return s
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim();
 }
