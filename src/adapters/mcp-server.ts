@@ -9,7 +9,7 @@ import { findTripByNumber } from "../use-cases/find-trip-by-number.js";
 import { findStationsNearby } from "../use-cases/find-stations-nearby.js";
 import { getTimetable } from "../use-cases/get-timetable.js";
 import { checkDelay } from "../use-cases/check-delay.js";
-import { getFeedWarning } from "../use-cases/feed-status.js";
+import { getFeedWarning, buildFeedInfo } from "../use-cases/feed-status.js";
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -26,6 +26,23 @@ const TRAIN_TYPES_DESCRIPTION =
   "private carriers 'RJ' (RegioJet), 'LE' (Leo Express). Case-insensitive. " +
   "Omit or pass [] to include all categories.";
 
+const VIA_DESCRIPTION =
+  "Optional intermediate station the journey must pass through, e.g. 'Žilina'. " +
+  "Fuzzy-matched like from/to. For direct search the trip must visit this " +
+  "station strictly between from and to. For transfer search the via may be " +
+  "the interchange itself or an intermediate of either leg.";
+
+const ARRIVE_BY_DESCRIPTION =
+  "Optional latest arrival time HH:MM (24h) at the destination. Filters out " +
+  "connections that arrive after this time. Combine with departure_after to " +
+  "bracket a travel window; leave departure_after at 00:00 to get 'last " +
+  "train arriving by X'.";
+
+const WHEELCHAIR_DESCRIPTION =
+  "Optional accessibility filter. When true, only trips explicitly marked " +
+  "wheelchair-accessible in the feed (wheelchair_accessible=1) are returned. " +
+  "Trips with unknown status (0) are excluded. Default false.";
+
 // All query tools are read-only and operate on the bounded GTFS index — safe
 // to mark as readOnly + non-destructive + idempotent + closed-world so clients
 // can route them through automated pipelines without extra confirmations.
@@ -39,7 +56,7 @@ const READ_ONLY_ANNOTATIONS = {
 // The zod `.describe()` strings below are rendered into JSON-schema and
 // shown to the LLM client — they are the tool's public contract.
 export function createMcpServer(gtfs: GtfsIndex): McpServer {
-  const server = new McpServer({ name: "zssk-mcp", version: "0.3.0" });
+  const server = new McpServer({ name: "zssk-mcp", version: "0.4.0" });
 
   server.registerTool(
     "find_connection",
@@ -59,8 +76,11 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
           .regex(TIME_REGEX)
           .optional()
           .describe("Earliest departure time HH:MM (24h). Defaults to 00:00."),
+        arrive_by: z.string().regex(TIME_REGEX).optional().describe(ARRIVE_BY_DESCRIPTION),
         operator: z.string().min(1).optional().describe(OPERATOR_DESCRIPTION),
         train_types: z.array(z.string().min(1)).optional().describe(TRAIN_TYPES_DESCRIPTION),
+        via: z.string().min(1).optional().describe(VIA_DESCRIPTION),
+        wheelchair_only: z.boolean().optional().describe(WHEELCHAIR_DESCRIPTION),
       },
     },
     async (args) => respond(gtfs, findConnection(gtfs, {
@@ -68,8 +88,11 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
       to: args.to,
       date: args.date,
       departureAfter: args.departure_after ?? "00:00",
+      arriveBy: args.arrive_by ?? null,
       operator: args.operator ?? null,
       trainTypes: args.train_types ?? null,
+      via: args.via ?? null,
+      wheelchairOnly: args.wheelchair_only ?? false,
     })),
   );
 
@@ -92,8 +115,11 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
           .regex(TIME_REGEX)
           .optional()
           .describe("Earliest departure time HH:MM (24h). Defaults to 00:00."),
+        arrive_by: z.string().regex(TIME_REGEX).optional().describe(ARRIVE_BY_DESCRIPTION),
         operator: z.string().min(1).optional().describe(OPERATOR_DESCRIPTION),
         train_types: z.array(z.string().min(1)).optional().describe(TRAIN_TYPES_DESCRIPTION),
+        via: z.string().min(1).optional().describe(VIA_DESCRIPTION),
+        wheelchair_only: z.boolean().optional().describe(WHEELCHAIR_DESCRIPTION),
       },
     },
     async (args) => respond(gtfs, findConnectionWithTransfer(gtfs, {
@@ -101,8 +127,11 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
       to: args.to,
       date: args.date,
       departureAfter: args.departure_after ?? "00:00",
+      arriveBy: args.arrive_by ?? null,
       operator: args.operator ?? null,
       trainTypes: args.train_types ?? null,
+      via: args.via ?? null,
+      wheelchairOnly: args.wheelchair_only ?? false,
     })),
   );
 
@@ -125,6 +154,7 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
           .describe("Max rows to return. Default 20."),
         operator: z.string().min(1).optional().describe(OPERATOR_DESCRIPTION),
         train_types: z.array(z.string().min(1)).optional().describe(TRAIN_TYPES_DESCRIPTION),
+        wheelchair_only: z.boolean().optional().describe(WHEELCHAIR_DESCRIPTION),
       },
     },
     async (args) => respond(gtfs, getTimetable(gtfs, {
@@ -133,6 +163,7 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
       limit: args.limit ?? 20,
       operator: args.operator ?? null,
       trainTypes: args.train_types ?? null,
+      wheelchairOnly: args.wheelchair_only ?? false,
     })),
   );
 
@@ -151,11 +182,13 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
           .min(1)
           .describe("Train number as printed on the ticket, e.g. 'Ex 603' or just '603'."),
         date: z.string().regex(DATE_REGEX).describe("Service date YYYY-MM-DD."),
+        wheelchair_only: z.boolean().optional().describe(WHEELCHAIR_DESCRIPTION),
       },
     },
     async (args) => respond(gtfs, findTripByNumber(gtfs, {
       trainNumber: args.train_number,
       date: args.date,
+      wheelchairOnly: args.wheelchair_only ?? false,
     })),
   );
 
@@ -199,6 +232,31 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
       },
     },
     async (args) => respond(gtfs, checkDelay({ trainNumber: args.train_number })),
+  );
+
+  // Static resource so a client can read the feed metadata (version, validity
+  // window, agencies, index sizes) once at session start, without burning a
+  // tool call. Useful as a hint when the LLM is deciding whether a date is
+  // likely to be covered.
+  server.registerResource(
+    "feed-info",
+    "zssk://feed/info",
+    {
+      title: "GTFS feed metadata",
+      description:
+        "Current feed version, validity window, publisher, agencies, and dataset " +
+        "sizes. Refreshed on server start-up.",
+      mimeType: "application/json",
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(buildFeedInfo(gtfs), null, 2),
+        },
+      ],
+    }),
   );
 
   return server;

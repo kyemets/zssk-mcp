@@ -43,3 +43,36 @@ export function getFeedWarning(gtfs: GtfsIndex, today: Date = new Date()): FeedW
 function formatDate(yyyymmdd: string): string {
   return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
 }
+
+// Snapshot of the loaded feed. Used by both the zssk://feed/info MCP resource
+// and smoke tests, so it lives with the rest of the feed-status logic instead
+// of in the adapter.
+export type FeedInfoSnapshot = Readonly<{
+  feedVersion: string;
+  feedStartDate: string;
+  feedEndDate: string;
+  agencies: ReadonlyArray<{ agencyId: string; agencyName: string }>;
+  counts: Readonly<{ stops: number; trips: number; routes: number; services: number; stopTimes: number }>;
+  warning: FeedWarning | null;
+}>;
+
+export function buildFeedInfo(gtfs: GtfsIndex): FeedInfoSnapshot {
+  const stopTimes = Array.from(gtfs.stopTimesByTrip.values()).reduce((n, a) => n + a.length, 0);
+  return {
+    feedVersion: gtfs.feedVersion,
+    feedStartDate: gtfs.feedStartDate,
+    feedEndDate: gtfs.feedEndDate,
+    agencies: Array.from(gtfs.agenciesById.values()).map(a => ({
+      agencyId: a.agencyId,
+      agencyName: a.agencyName,
+    })),
+    counts: {
+      stops: gtfs.stopsById.size,
+      trips: gtfs.tripsById.size,
+      routes: gtfs.routesById.size,
+      services: gtfs.servicesById.size,
+      stopTimes,
+    },
+    warning: getFeedWarning(gtfs),
+  };
+}

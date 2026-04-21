@@ -1,70 +1,89 @@
 # zssk-mcp — roadmap
 
-Status after v0.3.0 (feat/v0.3-ergonomics).
+Status after v0.4.0 (`feat/v0.4-ergonomics-extras`).
+
+---
+
+## ✅ Done in v4
+
+### `via` parameter
+
+On `find_connection` and `find_connection_with_transfer`. For direct search
+the trip must visit `via` strictly between `from` and `to`. For transfer
+search the via may be the interchange or lie on either leg. Unknown `via`
+value returns `no_match` with `which: "via"` — no silent expansion.
+
+### `arrive_by` parameter
+
+Same two tools accept an `arrive_by` (`HH:MM`) gate on the destination
+arrival time. Natural fit for "last train home by X" and "what can I
+catch if I must arrive by noon".
+
+### `wheelchair_only` filter
+
+Loaded `wheelchair_accessible` from `trips.txt` into a new
+`WheelchairAccessibility` field on the `Trip` entity. Applied as a filter
+on the four trip-returning tools (`find_connection`,
+`find_connection_with_transfer`, `get_timetable`, `find_trip_by_number`).
+Trips with unknown status (`0`) are excluded when the filter is on.
+
+### `date_out_of_range` status
+
+New explicit status on every date-taking tool when the requested date
+falls outside `feed_start_date..feed_end_date`. Replaces the earlier
+silent empty response that was easily misread as "no trains that day".
+
+### MCP resource `zssk://feed/info`
+
+Static read-only resource published alongside the six tools. Returns
+`{ feedVersion, feedStartDate, feedEndDate, agencies, counts, warning }`.
+Client reads it once per session to get the feed's validity window
+without burning a tool call.
 
 ---
 
 ## ✅ Done in v3
 
-### #4 `find_trip_by_number` — shipped
+- `find_trip_by_number` — full stop list for a named train.
+- `find_stations_nearby` — haversine proximity search.
+- `train_types` filter (Os / R / REX / Ex / IC / EC / RJ / LE).
+- `_feed_warning` field injected on tool responses ≤14 days from expiry.
+- MCP tool annotations (`readOnly`, non-destructive, idempotent, closed-world).
 
-Look up one or more trips by the human train number printed on tickets
-(`Ex 603`, `R 681`, `RJ 1046`). Matches against both `route_short_name`
-and `trip_short_name`, so either `Ex 603` or just `603` works. Returns
-full stop lists with arrival / departure / platform per stop, filtered
-to the specific service date.
+## ✅ Done in v2
 
-### #5 Train-type filter — shipped
-
-`find_connection`, `find_connection_with_transfer` and `get_timetable`
-accept `train_types?: string[]` (ZSSK categories: `Os`, `R`, `REX`,
-`Ex`, `IC`, `EC`, `RJ`, `LE`). Category is parsed as the first token of
-`route_short_name`. Empty / omitted → no filter. Smoke verifies that
-`["Ex"]` actually shrinks results and every output starts with `Ex `.
-
-### #6 `find_stations_nearby` — shipped
-
-Haversine proximity search. Input: `lat`, `lon`, `radius_km` (default 10,
-max 500). Output: stations sorted by distance (`distanceKm` rounded to
-3 decimals), capped at 50 results. Invalid coordinates return
-`invalid_coordinates` with a reason. Stations with unknown coordinates
-(`lat==0 && lon==0` in the feed) are silently skipped.
-
-### #7 Tool annotations — shipped
-
-All six tools expose `readOnlyHint: true`, `destructiveHint: false`,
-`idempotentHint: true`, `openWorldHint: false`. Clients that honor the
-MCP annotation hints can route these through without extra user
-confirmation.
-
-### #8 Feed-expiry warning — shipped
-
-Loader now reads `feed_start_date` / `feed_end_date` from
-`feed_info.txt`. A thin `getFeedWarning()` helper returns `warning` when
-validity is within 14 days of ending, `expired` once `feed_end_date` is
-in the past. The adapter wraps every tool response so the warning
-appears as `_feed_warning` on every payload — no changes needed in the
-pure use-case layer.
+- `find_connection_with_transfer` — single-transfer itineraries.
+- `operator` filter with alias table (ZSSK / RJ / LE / Trezka).
+- License confirmed as CC0-1.0.
+- Smoke: structural floor on dataset sizes + tight alias-leak regression.
 
 ---
 
-## 🛑 Still open (unchanged from v2)
+## 🛑 Still open
 
 ### #1 Real-time delays
 
-Same blocker as in v2 — requires a source decision (scrape
+Same blocker as v2/v3 — requires a source decision (scrape
 `zssk.sk/aktualna-poloha-vlakov` vs third-party aggregator vs wait for
 GTFS-RT). `check_delay` remains a stub.
+
+### Ticket prices / fares
+
+Investigated in v4 — dead-end for a clean implementation. Feed has no
+GTFS-Fares data; ZSSK's booking API requires auth; scraping breaks the
+"no scraping" rule and misses promos/discounts (error ±30–50 %).
+Intentionally not adding an `estimate_price` tool that would silently
+hallucinate numbers. If you want it, the realistic option is a static
+TR-201 tariff table with an explicit `_estimate_warning` on every
+response — ~1 day of work, pending a go-ahead.
 
 ---
 
 ## Explicitly still out of scope
 
-- Ticket booking, fares, seat selection — different data source.
-- Multi-transfer (2+ changes) routing — current single-transfer coverage
-  is good enough for a pet-project scope.
-- Web UI / dashboard — this stays an MCP server.
-- Docker / CI — doesn't warrant the overhead.
-- A full test framework — smoke test with structural assertions plus
-  `tsc --noEmit` is enough.
-- A database — in-memory comfortably fits the 30 k stop_times.
+- Multi-transfer (2+ changes) routing.
+- Ticket booking, fares, seat selection (see above).
+- Web UI / dashboard.
+- Docker.
+- A full test framework — smoke test plus `tsc --noEmit` is enough.
+- A database.

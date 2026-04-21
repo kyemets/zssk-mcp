@@ -91,6 +91,39 @@ Tool responses gain a `_feed_warning` field when the GTFS feed's
 Refresh with `ZSSK_GTFS_REFRESH=1` ahead of the December grafikon
 switchover.
 
+### via, arrive_by, wheelchair_only (v4)
+
+`find_connection` and `find_connection_with_transfer` take three more
+optional arguments:
+
+- **`via: string`** — intermediate station the journey must pass through
+  (fuzzy-matched). For direct search, the trip must visit via strictly
+  between from and to. For transfer search, via may be the interchange or
+  lie on either leg. Unknown via returns `no_match` with `which: "via"`.
+- **`arrive_by: string`** (`HH:MM`, 24h) — upper bound on arrival time at
+  the destination. Pair with `departure_after` to bracket a travel window.
+  `arrive_by` alone gives "last train arriving by X".
+- **`wheelchair_only: boolean`** — restricts results to trips explicitly
+  marked `wheelchair_accessible=1` in `trips.txt`. Trips with unknown
+  status (`0`) are excluded.
+
+`get_timetable` and `find_trip_by_number` also take `wheelchair_only`.
+
+### Date-out-of-range status (v4)
+
+Every date-taking tool (`find_connection`, `find_connection_with_transfer`,
+`get_timetable`, `find_trip_by_number`) now returns
+`{ status: "date_out_of_range", feedStartDate, feedEndDate }` when the
+requested date falls outside the feed's validity window — instead of
+silently returning an empty list that looks like "no trains".
+
+### Feed-info resource (v4)
+
+The server publishes a static MCP **resource** at `zssk://feed/info` with
+`{ feedVersion, feedStartDate, feedEndDate, agencies, counts, warning }`.
+A client can read it once per session for context instead of calling a
+tool just to get the feed's validity window.
+
 ### Station matching
 
 Stations are fuzzy-matched against `stops.txt:stop_name`, case- and
@@ -313,14 +346,14 @@ src/
   use-cases/        pure logic over a GtfsIndex
     resolve-station.ts
     resolve-agency.ts
-    service-calendar.ts
+    service-calendar.ts            (+ date-range check)
     train-category.ts
-    feed-status.ts
-    find-connection.ts
-    find-connection-with-transfer.ts
-    find-trip-by-number.ts
+    feed-status.ts                 (warning + buildFeedInfo for resource)
+    find-connection.ts             (+ via, arrive_by, wheelchair_only)
+    find-connection-with-transfer.ts   (+ via, arrive_by, wheelchair_only)
+    find-trip-by-number.ts         (+ wheelchair_only)
     find-stations-nearby.ts
-    get-timetable.ts
+    get-timetable.ts               (+ wheelchair_only)
     check-delay.ts
   adapters/         external-world concerns
     gtfs-loader.ts  (download + cache + parse)

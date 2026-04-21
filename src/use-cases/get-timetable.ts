@@ -1,7 +1,7 @@
 import type { GtfsIndex } from "../entities/gtfs-index.js";
 import { resolveStation } from "./resolve-station.js";
 import { resolveAgencies } from "./resolve-agency.js";
-import { serviceRunsOn, toGtfsDate } from "./service-calendar.js";
+import { serviceRunsOn, toGtfsDate, checkDateInRange } from "./service-calendar.js";
 import { matchesTrainTypes, normalizeTrainTypes } from "./train-category.js";
 
 export type GetTimetableInput = Readonly<{
@@ -10,6 +10,7 @@ export type GetTimetableInput = Readonly<{
   limit: number;
   operator: string | null;
   trainTypes: ReadonlyArray<string> | null;
+  wheelchairOnly: boolean;
 }>;
 
 export type Departure = Readonly<{
@@ -21,6 +22,7 @@ export type Departure = Readonly<{
   departureTime: string;
   arrivalTime: string;
   platformCode: string | null;
+  wheelchairAccessible: 0 | 1 | 2;
 }>;
 
 type StationCandidate = Readonly<{ stopId: string; stopName: string }>;
@@ -29,9 +31,20 @@ export type GetTimetableResult =
   | Readonly<{ status: "ok"; station: string; date: string; departures: ReadonlyArray<Departure> }>
   | Readonly<{ status: "ambiguous"; candidates: ReadonlyArray<StationCandidate> }>
   | Readonly<{ status: "no_match" }>
-  | Readonly<{ status: "no_match_operator"; operator: string; available: ReadonlyArray<string> }>;
+  | Readonly<{ status: "no_match_operator"; operator: string; available: ReadonlyArray<string> }>
+  | Readonly<{ status: "date_out_of_range"; date: string; feedStartDate: string; feedEndDate: string }>;
 
 export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTimetableResult {
+  const dateCheck = checkDateInRange(gtfs, input.date);
+  if (!dateCheck.ok) {
+    return {
+      status: "date_out_of_range",
+      date: input.date,
+      feedStartDate: dateCheck.feedStartDate,
+      feedEndDate: dateCheck.feedEndDate,
+    };
+  }
+
   const match = resolveStation(input.station, gtfs.stopsById);
   if (match.kind === "none") return { status: "no_match" };
   if (match.kind === "ambiguous") {
@@ -59,6 +72,7 @@ export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTime
     const trip = gtfs.tripsById.get(st.tripId);
     if (!trip) continue;
     if (!serviceRunsOn(gtfs, trip.serviceId, gtfsDate)) continue;
+    if (input.wheelchairOnly && trip.wheelchairAccessible !== 1) continue;
 
     // Skip terminus rows: GTFS stores arrival_time == departure_time there,
     // which would leak as a phantom departure.
@@ -84,6 +98,7 @@ export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTime
       // ŽSR feed has no per-trip platform data — fall back to the station's
       // default platform_code when present.
       platformCode: match.station.platformCode,
+      wheelchairAccessible: trip.wheelchairAccessible,
     });
   }
 

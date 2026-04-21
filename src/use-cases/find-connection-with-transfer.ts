@@ -4,7 +4,7 @@ import type { Trip } from "../entities/trip.js";
 import type { StopTime } from "../entities/stop-time.js";
 import { resolveStation } from "./resolve-station.js";
 import { resolveAgencies } from "./resolve-agency.js";
-import { serviceRunsOn, toGtfsDate } from "./service-calendar.js";
+import { serviceRunsOn, toGtfsDate, checkDateInRange } from "./service-calendar.js";
 import { matchesTrainTypes, normalizeTrainTypes } from "./train-category.js";
 
 export type FindTransferInput = Readonly<{
@@ -12,8 +12,11 @@ export type FindTransferInput = Readonly<{
   to: string;
   date: string;
   departureAfter: string;
+  arriveBy: string | null;
   operator: string | null;
   trainTypes: ReadonlyArray<string> | null;
+  via: string | null;
+  wheelchairOnly: boolean;
 }>;
 
 export type Leg = Readonly<{
@@ -26,6 +29,7 @@ export type Leg = Readonly<{
   toStop: string;
   departureTime: string;
   arrivalTime: string;
+  wheelchairAccessible: 0 | 1 | 2;
 }>;
 
 export type Itinerary = Readonly<{
@@ -38,12 +42,14 @@ export type Itinerary = Readonly<{
 }>;
 
 type StationCandidate = Readonly<{ stopId: string; stopName: string }>;
+type Which = "from" | "to" | "via";
 
 export type FindTransferResult =
-  | Readonly<{ status: "ok"; date: string; from: string; to: string; itineraries: ReadonlyArray<Itinerary> }>
-  | Readonly<{ status: "ambiguous"; which: "from" | "to"; candidates: ReadonlyArray<StationCandidate> }>
-  | Readonly<{ status: "no_match"; which: "from" | "to" }>
-  | Readonly<{ status: "no_match_operator"; operator: string; available: ReadonlyArray<string> }>;
+  | Readonly<{ status: "ok"; date: string; from: string; to: string; via: string | null; itineraries: ReadonlyArray<Itinerary> }>
+  | Readonly<{ status: "ambiguous"; which: Which; candidates: ReadonlyArray<StationCandidate> }>
+  | Readonly<{ status: "no_match"; which: Which }>
+  | Readonly<{ status: "no_match_operator"; operator: string; available: ReadonlyArray<string> }>
+  | Readonly<{ status: "date_out_of_range"; date: string; feedStartDate: string; feedEndDate: string }>;
 
 // Policy: single transfer only, 5 min ≤ wait ≤ 180 min. Multi-leg search
 // explodes combinatorially and the extra legs add more noise than value.
@@ -56,6 +62,16 @@ export function findConnectionWithTransfer(
   gtfs: GtfsIndex,
   input: FindTransferInput,
 ): FindTransferResult {
+  const dateCheck = checkDateInRange(gtfs, input.date);
+  if (!dateCheck.ok) {
+    return {
+      status: "date_out_of_range",
+      date: input.date,
+      feedStartDate: dateCheck.feedStartDate,
+      feedEndDate: dateCheck.feedEndDate,
+    };
+  }
+
   const fromMatch = resolveStation(input.from, gtfs.stopsById);
   if (fromMatch.kind === "none") return { status: "no_match", which: "from" };
   if (fromMatch.kind === "ambiguous") {
@@ -66,6 +82,18 @@ export function findConnectionWithTransfer(
   if (toMatch.kind === "none") return { status: "no_match", which: "to" };
   if (toMatch.kind === "ambiguous") {
     return { status: "ambiguous", which: "to", candidates: toMatch.candidates.map(toCandidate) };
+  }
+
+  let viaStopId: string | null = null;
+  let viaStopName: string | null = null;
+  if (input.via) {
+    const viaMatch = resolveStation(input.via, gtfs.stopsById);
+    if (viaMatch.kind === "none") return { status: "no_match", which: "via" };
+    if (viaMatch.kind === "ambiguous") {
+      return { status: "ambiguous", which: "via", candidates: viaMatch.candidates.map(toCandidate) };
+    }
+    viaStopId = viaMatch.station.stopId;
+    viaStopName = viaMatch.station.stopName;
   }
 
   const allowedAgencyIds = resolveOperator(input.operator, gtfs);
@@ -79,6 +107,7 @@ export function findConnectionWithTransfer(
 
   const gtfsDate = toGtfsDate(input.date);
   const afterSec = `${input.departureAfter}:00`;
+  const arriveByTime = input.arriveBy ? `${input.arriveBy}:00` : null;
   const fromId = fromMatch.station.stopId;
   const toId = toMatch.station.stopId;
   const allowedTypes = normalizeTrainTypes(input.trainTypes);
@@ -91,6 +120,7 @@ export function findConnectionWithTransfer(
     const leg1Trip = gtfs.tripsById.get(leg1Dep.tripId);
     if (!leg1Trip) continue;
     if (!serviceRunsOn(gtfs, leg1Trip.serviceId, gtfsDate)) continue;
+    if (input.wheelchairOnly && leg1Trip.wheelchairAccessible !== 1) continue;
     if (allowedAgencyIds && !agencyAllowed(gtfs, leg1Trip, allowedAgencyIds)) continue;
     if (!matchesTrainTypes(gtfs.routesById.get(leg1Trip.routeId), allowedTypes)) continue;
 
@@ -108,8 +138,6 @@ export function findConnectionWithTransfer(
       if (intermediate.stopSequence <= leg1Dep.stopSequence) continue;
       if (intermediate.stopId === fromId || intermediate.stopId === toId) continue;
 
-      // Cap per-hub emissions so a crowded station (Žilina, Bratislava)
-      // doesn't blow out the candidate list before global sort.
       let perHubEmitted = 0;
       for (const leg2Dep of gtfs.stopTimesByStop.get(intermediate.stopId) ?? []) {
         if (leg2Dep.tripId === leg1Dep.tripId) continue;
@@ -121,6 +149,7 @@ export function findConnectionWithTransfer(
         const leg2Trip = gtfs.tripsById.get(leg2Dep.tripId);
         if (!leg2Trip) continue;
         if (!serviceRunsOn(gtfs, leg2Trip.serviceId, gtfsDate)) continue;
+        if (input.wheelchairOnly && leg2Trip.wheelchairAccessible !== 1) continue;
         if (allowedAgencyIds && !agencyAllowed(gtfs, leg2Trip, allowedAgencyIds)) continue;
         if (!matchesTrainTypes(gtfs.routesById.get(leg2Trip.routeId), allowedTypes)) continue;
 
@@ -130,6 +159,25 @@ export function findConnectionWithTransfer(
           st => st.stopId === toId && st.stopSequence > leg2Dep.stopSequence,
         );
         if (!leg2Arr) continue;
+        if (arriveByTime && leg2Arr.arrivalTime > arriveByTime) continue;
+
+        // via must lie on the itinerary path: either the interchange itself,
+        // or an intermediate of leg1 (strictly between from and transferAt),
+        // or an intermediate of leg2 (strictly between transferAt and to).
+        if (viaStopId) {
+          const isInterchange = intermediate.stopId === viaStopId;
+          const onLeg1 = !isInterchange && leg1Stops.some(
+            st => st.stopId === viaStopId
+              && st.stopSequence > leg1Dep.stopSequence
+              && st.stopSequence < intermediate.stopSequence,
+          );
+          const onLeg2 = !isInterchange && !onLeg1 && leg2Stops.some(
+            st => st.stopId === viaStopId
+              && st.stopSequence > leg2Dep.stopSequence
+              && st.stopSequence < leg2Arr.stopSequence,
+          );
+          if (!isInterchange && !onLeg1 && !onLeg2) continue;
+        }
 
         const intermediateStation = gtfs.stopsById.get(intermediate.stopId);
         candidates.push({
@@ -163,6 +211,7 @@ export function findConnectionWithTransfer(
     date: input.date,
     from: fromMatch.station.stopName,
     to: toMatch.station.stopName,
+    via: viaStopName,
     itineraries: candidates.slice(0, MAX_OUTPUT),
   };
 }
@@ -188,6 +237,7 @@ function makeLeg(
     toStop: toStation?.stopName ?? arr.stopId,
     departureTime: dep.departureTime.slice(0, 5),
     arrivalTime: arr.arrivalTime.slice(0, 5),
+    wheelchairAccessible: trip.wheelchairAccessible,
   };
 }
 

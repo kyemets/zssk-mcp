@@ -83,6 +83,10 @@ function parseTrips(): Map<string, Trip> {
   const map = new Map<string, Trip>();
   for (const r of rows) {
     const tripId = required(r, "trip_id", "trips.txt");
+    const wheelchairRaw = r.wheelchair_accessible ? Number(r.wheelchair_accessible) : 0;
+    // GTFS values outside {0,1,2} are garbage — normalize to 0 ("no info")
+    // rather than trusting arbitrary integers downstream.
+    const wheelchair = wheelchairRaw === 1 || wheelchairRaw === 2 ? wheelchairRaw : 0;
     map.set(tripId, {
       tripId,
       routeId: required(r, "route_id", "trips.txt"),
@@ -90,6 +94,7 @@ function parseTrips(): Map<string, Trip> {
       headsign: r.trip_headsign ?? "",
       shortName: r.trip_short_name ?? "",
       directionId: r.direction_id ?? "",
+      wheelchairAccessible: wheelchair,
     });
   }
   return map;
