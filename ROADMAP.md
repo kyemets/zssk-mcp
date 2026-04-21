@@ -1,85 +1,68 @@
 # zssk-mcp — roadmap
 
-Status after v0.2.0 ship.
+Status after v0.3.0 (feat/v0.3-ergonomics).
 
 ---
 
-## ✅ Done in v2
+## ✅ Done in v3
 
-### #2 Transfers — shipped as `find_connection_with_transfer`
+### #4 `find_trip_by_number` — shipped
 
-Separate tool (v1 `find_connection` contract unchanged). Single-transfer
-itineraries with 5-min minimum and 180-min maximum wait at the interchange.
-Explicitly excludes trips that already reach the destination directly —
-those stay in `find_connection`, so the two tools give a non-overlapping view.
+Look up one or more trips by the human train number printed on tickets
+(`Ex 603`, `R 681`, `RJ 1046`). Matches against both `route_short_name`
+and `trip_short_name`, so either `Ex 603` or just `603` works. Returns
+full stop lists with arrival / departure / platform per stop, filtered
+to the specific service date.
 
-Performance guardrails:
-- Per-interchange hub cap of 5 emitted itineraries (stops a crowded junction
-  like Žilina from dominating).
-- Global pre-sort cap of 500 candidates.
-- Output sorted by arrival time, then duration; top 20 returned.
+### #5 Train-type filter — shipped
 
-Verified on real data: Bratislava → Prešov routes correctly via Kysak
-(Ex 607 TATRAN → REX 1954), which is the actual ZSSK-recommended change.
+`find_connection`, `find_connection_with_transfer` and `get_timetable`
+accept `train_types?: string[]` (ZSSK categories: `Os`, `R`, `REX`,
+`Ex`, `IC`, `EC`, `RJ`, `LE`). Category is parsed as the first token of
+`route_short_name`. Empty / omitted → no filter. Smoke verifies that
+`["Ex"]` actually shrinks results and every output starts with `Ex `.
 
-### #3 Agency filter — shipped
+### #6 `find_stations_nearby` — shipped
 
-Optional `operator` parameter on all three search tools
-(`find_connection`, `find_connection_with_transfer`, `get_timetable`).
-Accepts fuzzy substring or short codes via an alias table
-(`ZSSK → Železničná spoločnosť Slovensko`, `RJ → RegioJet`, etc.).
-Unknown operators return a structured `no_match_operator` response with
-the list of 5 available agencies — no silent empty results.
+Haversine proximity search. Input: `lat`, `lon`, `radius_km` (default 10,
+max 500). Output: stations sorted by distance (`distanceKm` rounded to
+3 decimals), capped at 50 results. Invalid coordinates return
+`invalid_coordinates` with a reason. Stations with unknown coordinates
+(`lat==0 && lon==0` in the feed) are silently skipped.
 
-### #4 License — confirmed CC0-1.0
+### #7 Tool annotations — shipped
 
-Transitland records this feed under CC0-1.0 (Public Domain). Matches the
-Slovak national open-data portal's default policy under Act 95/2019 on ITVS.
-README now cites the license directly instead of hedging.
+All six tools expose `readOnlyHint: true`, `destructiveHint: false`,
+`idempotentHint: true`, `openWorldHint: false`. Clients that honor the
+MCP annotation hints can route these through without extra user
+confirmation.
 
-### #5 Snapshot sanity — shipped in `scripts/smoke.ts`
+### #8 Feed-expiry warning — shipped
 
-Structural floor only, not a percentage threshold (per the softer option
-discussed). Asserts: each index has a conservative minimum size, every
-tool returns the expected status, agency filter doesn't leak foreign
-operators, and `feedVersion` parses as YYYYMMDD. Seasonal grafikon swings
-don't trip it; upstream column renames or empty files do.
+Loader now reads `feed_start_date` / `feed_end_date` from
+`feed_info.txt`. A thin `getFeedWarning()` helper returns `warning` when
+validity is within 14 days of ending, `expired` once `feed_end_date` is
+in the past. The adapter wraps every tool response so the warning
+appears as `_feed_warning` on every payload — no changes needed in the
+pure use-case layer.
 
 ---
 
-## 🛑 Still open
+## 🛑 Still open (unchanged from v2)
 
 ### #1 Real-time delays
 
-**Blocked on a source decision.** Explicitly documented in the original
-v1 spec as out of scope, and the v1 rule "don't scrape zssk.sk as a
-workaround" still applies here unless overridden.
-
-Options, unchanged since v2 kickoff:
-
-- Scrape `zssk.sk/aktualna-poloha-vlakov` (HTML / possible JSON behind
-  the live map) — fastest path, breaks the no-scraping rule.
-- Pull from a third-party aggregator (e.g. chaps.cz / CIS) — cleaner,
-  needs checking whether ZSSK actually feeds them.
-- Wait for ŽSR to publish GTFS-RT — cleanest, no visible ETA.
-
-**Decision needed from user** before any implementation:
-1. Which source is OK.
-2. Is it acceptable to degrade `check_delay` to the stub on upstream
-   failure (expected to happen often with a scrape), or should errors
-   surface hard?
-
-Scope estimate once unblocked: ~1 day including caching + failure-mode
-handling. Will stay as a stub until you give the go.
+Same blocker as in v2 — requires a source decision (scrape
+`zssk.sk/aktualna-poloha-vlakov` vs third-party aggregator vs wait for
+GTFS-RT). `check_delay` remains a stub.
 
 ---
 
 ## Explicitly still out of scope
 
-- Ticket booking, fares, seat selection — different data source,
-  requires ZSSK account / API access.
-- Multi-transfer (2+ changes) routing — diminishing returns for a
-  pet-project scope; current single-transfer coverage is good enough.
+- Ticket booking, fares, seat selection — different data source.
+- Multi-transfer (2+ changes) routing — current single-transfer coverage
+  is good enough for a pet-project scope.
 - Web UI / dashboard — this stays an MCP server.
 - Docker / CI — doesn't warrant the overhead.
 - A full test framework — smoke test with structural assertions plus

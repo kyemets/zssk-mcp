@@ -2,12 +2,14 @@ import type { GtfsIndex } from "../entities/gtfs-index.js";
 import { resolveStation } from "./resolve-station.js";
 import { resolveAgencies } from "./resolve-agency.js";
 import { serviceRunsOn, toGtfsDate } from "./service-calendar.js";
+import { matchesTrainTypes, normalizeTrainTypes } from "./train-category.js";
 
 export type GetTimetableInput = Readonly<{
   station: string;
   date: string;
   limit: number;
   operator: string | null;
+  trainTypes: ReadonlyArray<string> | null;
 }>;
 
 export type Departure = Readonly<{
@@ -49,6 +51,7 @@ export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTime
   }
 
   const gtfsDate = toGtfsDate(input.date);
+  const allowedTypes = normalizeTrainTypes(input.trainTypes);
   const stopTimes = gtfs.stopTimesByStop.get(match.station.stopId) ?? [];
   const departures: Departure[] = [];
 
@@ -65,6 +68,7 @@ export function getTimetable(gtfs: GtfsIndex, input: GetTimetableInput): GetTime
 
     const route = gtfs.routesById.get(trip.routeId);
     if (allowedAgencyIds && !(route && allowedAgencyIds.has(route.agencyId))) continue;
+    if (!matchesTrainTypes(route, allowedTypes)) continue;
 
     const trainNumber = (route?.shortName || trip.shortName || trip.tripId).trim();
     const agencyName = route ? (gtfs.agenciesById.get(route.agencyId)?.agencyName ?? "") : "";

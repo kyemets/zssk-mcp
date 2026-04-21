@@ -3,6 +3,7 @@ import type { Station } from "../entities/station.js";
 import { resolveStation } from "./resolve-station.js";
 import { resolveAgencies } from "./resolve-agency.js";
 import { serviceRunsOn, toGtfsDate } from "./service-calendar.js";
+import { matchesTrainTypes, normalizeTrainTypes } from "./train-category.js";
 
 export type FindConnectionInput = Readonly<{
   from: string;
@@ -10,6 +11,7 @@ export type FindConnectionInput = Readonly<{
   date: string;
   departureAfter: string;
   operator: string | null;
+  trainTypes: ReadonlyArray<string> | null;
 }>;
 
 export type Connection = Readonly<{
@@ -61,6 +63,7 @@ export function findConnection(gtfs: GtfsIndex, input: FindConnectionInput): Fin
   const afterTime = `${input.departureAfter}:00`;
   const fromId = fromMatch.station.stopId;
   const toId = toMatch.station.stopId;
+  const allowedTypes = normalizeTrainTypes(input.trainTypes);
 
   const departures = gtfs.stopTimesByStop.get(fromId) ?? [];
   const connections: Connection[] = [];
@@ -74,6 +77,7 @@ export function findConnection(gtfs: GtfsIndex, input: FindConnectionInput): Fin
 
     const route = gtfs.routesById.get(trip.routeId);
     if (allowedAgencyIds && !(route && allowedAgencyIds.has(route.agencyId))) continue;
+    if (!matchesTrainTypes(route, allowedTypes)) continue;
 
     const tripStops = gtfs.stopTimesByTrip.get(depart.tripId);
     if (!tripStops) continue;

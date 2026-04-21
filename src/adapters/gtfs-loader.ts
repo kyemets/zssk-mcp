@@ -207,13 +207,20 @@ function parseServices(): Map<string, Service> {
   return services;
 }
 
-function parseFeedVersion(): string {
+type FeedInfo = Readonly<{ version: string; startDate: string; endDate: string }>;
+
+function parseFeedInfo(): FeedInfo {
   const path = join(EXTRACT_DIR, "feed_info.txt");
-  if (!existsSync(path)) return "unknown";
+  if (!existsSync(path)) return { version: "unknown", startDate: "", endDate: "" };
   const rows = parseCsv(readFileSync(path, "utf8"), {
     columns: true, skip_empty_lines: true, trim: true, bom: true,
   }) as CsvRow[];
-  return rows[0]?.feed_version ?? "unknown";
+  const row = rows[0] ?? {};
+  return {
+    version: row.feed_version ?? "unknown",
+    startDate: row.feed_start_date ?? "",
+    endDate: row.feed_end_date ?? "",
+  };
 }
 
 export async function loadGtfs(): Promise<GtfsIndex> {
@@ -227,14 +234,14 @@ export async function loadGtfs(): Promise<GtfsIndex> {
   const agenciesById = parseAgencies();
   const { byTrip, byStop } = parseStopTimes();
   const servicesById = parseServices();
-  const feedVersion = parseFeedVersion();
+  const feedInfo = parseFeedInfo();
 
   const stopTimeCount = Array.from(byTrip.values()).reduce((n, a) => n + a.length, 0);
   console.error(
     `[gtfs] loaded: stops=${stopsById.size} trips=${tripsById.size} ` +
     `routes=${routesById.size} agencies=${agenciesById.size} ` +
     `stopTimes=${stopTimeCount} services=${servicesById.size} ` +
-    `feedVersion=${feedVersion}`,
+    `feedVersion=${feedInfo.version} validity=${feedInfo.startDate}→${feedInfo.endDate}`,
   );
 
   return {
@@ -245,6 +252,8 @@ export async function loadGtfs(): Promise<GtfsIndex> {
     stopTimesByTrip: byTrip,
     stopTimesByStop: byStop,
     servicesById,
-    feedVersion,
+    feedVersion: feedInfo.version,
+    feedStartDate: feedInfo.startDate,
+    feedEndDate: feedInfo.endDate,
   };
 }

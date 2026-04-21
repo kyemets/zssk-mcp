@@ -5,6 +5,7 @@ import type { StopTime } from "../entities/stop-time.js";
 import { resolveStation } from "./resolve-station.js";
 import { resolveAgencies } from "./resolve-agency.js";
 import { serviceRunsOn, toGtfsDate } from "./service-calendar.js";
+import { matchesTrainTypes, normalizeTrainTypes } from "./train-category.js";
 
 export type FindTransferInput = Readonly<{
   from: string;
@@ -12,6 +13,7 @@ export type FindTransferInput = Readonly<{
   date: string;
   departureAfter: string;
   operator: string | null;
+  trainTypes: ReadonlyArray<string> | null;
 }>;
 
 export type Leg = Readonly<{
@@ -79,6 +81,7 @@ export function findConnectionWithTransfer(
   const afterSec = `${input.departureAfter}:00`;
   const fromId = fromMatch.station.stopId;
   const toId = toMatch.station.stopId;
+  const allowedTypes = normalizeTrainTypes(input.trainTypes);
 
   const candidates: Itinerary[] = [];
 
@@ -89,6 +92,7 @@ export function findConnectionWithTransfer(
     if (!leg1Trip) continue;
     if (!serviceRunsOn(gtfs, leg1Trip.serviceId, gtfsDate)) continue;
     if (allowedAgencyIds && !agencyAllowed(gtfs, leg1Trip, allowedAgencyIds)) continue;
+    if (!matchesTrainTypes(gtfs.routesById.get(leg1Trip.routeId), allowedTypes)) continue;
 
     const leg1Stops = gtfs.stopTimesByTrip.get(leg1Dep.tripId);
     if (!leg1Stops) continue;
@@ -118,6 +122,7 @@ export function findConnectionWithTransfer(
         if (!leg2Trip) continue;
         if (!serviceRunsOn(gtfs, leg2Trip.serviceId, gtfsDate)) continue;
         if (allowedAgencyIds && !agencyAllowed(gtfs, leg2Trip, allowedAgencyIds)) continue;
+        if (!matchesTrainTypes(gtfs.routesById.get(leg2Trip.routeId), allowedTypes)) continue;
 
         const leg2Stops = gtfs.stopTimesByTrip.get(leg2Dep.tripId);
         if (!leg2Stops) continue;
