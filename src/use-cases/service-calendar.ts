@@ -27,3 +27,19 @@ function mondayIndexedDayOfWeek(yyyymmdd: string): number {
 export function toGtfsDate(isoDate: string): string {
   return isoDate.replaceAll("-", "");
 }
+
+export type DateRangeCheck =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; feedStartDate: string; feedEndDate: string }>;
+
+// Separates "date is outside the feed's validity window" (→ honest
+// date_out_of_range to the caller) from "date is inside but no trains run
+// that day" (→ empty results list).
+export function checkDateInRange(gtfs: { feedStartDate: string; feedEndDate: string }, isoDate: string): DateRangeCheck {
+  if (!gtfs.feedStartDate || !gtfs.feedEndDate) return { ok: true };
+  const gtfsDate = toGtfsDate(isoDate);
+  if (gtfsDate < gtfs.feedStartDate || gtfsDate > gtfs.feedEndDate) {
+    return { ok: false, feedStartDate: gtfs.feedStartDate, feedEndDate: gtfs.feedEndDate };
+  }
+  return { ok: true };
+}

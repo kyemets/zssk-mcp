@@ -1,9 +1,10 @@
 import type { GtfsIndex } from "../entities/gtfs-index.js";
-import { serviceRunsOn, toGtfsDate } from "./service-calendar.js";
+import { serviceRunsOn, toGtfsDate, checkDateInRange } from "./service-calendar.js";
 
 export type FindTripByNumberInput = Readonly<{
   trainNumber: string;
   date: string;
+  wheelchairOnly: boolean;
 }>;
 
 export type StopVisit = Readonly<{
@@ -25,17 +26,29 @@ export type TripDetails = Readonly<{
   toStop: string;
   departureTime: string;
   arrivalTime: string;
+  wheelchairAccessible: 0 | 1 | 2;
   stops: ReadonlyArray<StopVisit>;
 }>;
 
 export type FindTripByNumberResult =
   | Readonly<{ status: "ok"; trainNumber: string; date: string; trips: ReadonlyArray<TripDetails> }>
-  | Readonly<{ status: "no_match"; trainNumber: string; date: string }>;
+  | Readonly<{ status: "no_match"; trainNumber: string; date: string }>
+  | Readonly<{ status: "date_out_of_range"; date: string; feedStartDate: string; feedEndDate: string }>;
 
 // Match train number against both `route.short_name` ("Ex 603") and
 // `trip.short_name` ("603") so humans can type either form. Case and
 // whitespace are normalized; diacritics are not present in this field.
 export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput): FindTripByNumberResult {
+  const dateCheck = checkDateInRange(gtfs, input.date);
+  if (!dateCheck.ok) {
+    return {
+      status: "date_out_of_range",
+      date: input.date,
+      feedStartDate: dateCheck.feedStartDate,
+      feedEndDate: dateCheck.feedEndDate,
+    };
+  }
+
   const query = normalizeNumber(input.trainNumber);
   if (!query) return { status: "no_match", trainNumber: input.trainNumber, date: input.date };
 
@@ -48,6 +61,7 @@ export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput):
     const tripShort = normalizeNumber(trip.shortName);
     if (routeShort !== query && tripShort !== query) continue;
     if (!serviceRunsOn(gtfs, trip.serviceId, gtfsDate)) continue;
+    if (input.wheelchairOnly && trip.wheelchairAccessible !== 1) continue;
 
     const stopTimes = gtfs.stopTimesByTrip.get(trip.tripId);
     if (!stopTimes || stopTimes.length === 0) continue;
@@ -68,6 +82,7 @@ export function findTripByNumber(gtfs: GtfsIndex, input: FindTripByNumberInput):
       toStop: gtfs.stopsById.get(lastStop.stopId)?.stopName ?? lastStop.stopId,
       departureTime: firstStop.departureTime.slice(0, 5),
       arrivalTime: lastStop.arrivalTime.slice(0, 5),
+      wheelchairAccessible: trip.wheelchairAccessible,
       stops: stopTimes.map(st => {
         const station = gtfs.stopsById.get(st.stopId);
         return {

@@ -9,7 +9,7 @@ import { getTimetable } from "../src/use-cases/get-timetable.js";
 import { checkDelay } from "../src/use-cases/check-delay.js";
 import { resolveAgencies } from "../src/use-cases/resolve-agency.js";
 import { trainCategory } from "../src/use-cases/train-category.js";
-import { getFeedWarning } from "../src/use-cases/feed-status.js";
+import { getFeedWarning, buildFeedInfo } from "../src/use-cases/feed-status.js";
 
 const ZSSK_NAME = "Železničná spoločnosť Slovensko, a.s.";
 const REGIOJET_NAME = "RegioJet,a.s.";
@@ -74,8 +74,6 @@ async function main(): Promise<void> {
   assert(/^\d{8}$/.test(gtfs.feedEndDate), `feedEndDate not YYYYMMDD: ${gtfs.feedEndDate}`);
   assert(gtfs.feedEndDate > gtfs.feedStartDate, `feedEndDate not after feedStartDate`);
 
-  // Regression guard: a too-loose alias (e.g. "slovensko") would leak across
-  // "Železničná spoločnosť Slovensko" and "Leo Express Slovensko".
   assertAliasResolvesTo(gtfs, "ZSSK", [ZSSK_NAME]);
   assertAliasResolvesTo(gtfs, "zssk", [ZSSK_NAME]);
   assertAliasResolvesTo(gtfs, "Slovakrail", [ZSSK_NAME]);
@@ -85,7 +83,6 @@ async function main(): Promise<void> {
   assertAliasResolvesTo(gtfs, "Leo Express", [LEO_EXPRESS_CZ_NAME, LEO_EXPRESS_SK_NAME]);
   assertAliasResolvesTo(gtfs, "Trezka", [TREZKA_NAME]);
 
-  // Category parser — no surprises, first token is the category.
   assert(trainCategory("Ex 603") === "Ex", "trainCategory('Ex 603')");
   assert(trainCategory("R 681") === "R", "trainCategory('R 681')");
   assert(trainCategory("RJ 1046") === "RJ", "trainCategory('RJ 1046')");
@@ -101,7 +98,6 @@ async function main(): Promise<void> {
     trips: gtfs.tripsById.size,
     routes: gtfs.routesById.size,
     agencies: gtfs.agenciesById.size,
-    agencyNames: Array.from(gtfs.agenciesById.values()).map(a => a.agencyName),
     stopTimes,
     services: gtfs.servicesById.size,
     coldStartMs: coldMs,
@@ -117,8 +113,11 @@ async function main(): Promise<void> {
     to: "Košice",
     date: weekday,
     departureAfter: "00:00",
+    arriveBy: null,
     operator: null,
     trainTypes: null,
+    via: null,
+    wheelchairOnly: false,
   });
   assert(direct.status === "ok", `find_connection unexpected status: ${direct.status}`);
   assert(direct.connections.length > 0, `find_connection returned zero connections`);
@@ -130,34 +129,160 @@ async function main(): Promise<void> {
     to: "Košice",
     date: weekday,
     departureAfter: "00:00",
+    arriveBy: null,
     operator: "ZSSK",
     trainTypes: null,
+    via: null,
+    wheelchairOnly: false,
   });
   assert(zsskOnly.status === "ok", `find_connection(operator=ZSSK) status: ${zsskOnly.status}`);
   const zsskLeak = zsskOnly.connections.find(c => c.agency !== ZSSK_NAME);
   assert(zsskLeak === undefined, `ZSSK filter leaked non-ZSSK agency: ${zsskLeak?.agency ?? ""}`);
 
   // === train_types filter (Ex only) ===
-  console.log(`\n=== find_connection (train_types=["Ex"], Bratislava → Košice, ${weekday}) ===`);
   const exOnly = findConnection(gtfs, {
     from: "Bratislava hl.st.",
     to: "Košice",
     date: weekday,
     departureAfter: "00:00",
+    arriveBy: null,
     operator: null,
     trainTypes: ["Ex"],
+    via: null,
+    wheelchairOnly: false,
   });
   assert(exOnly.status === "ok", `find_connection(train_types=Ex) status: ${exOnly.status}`);
   assert(exOnly.connections.length > 0, `no Ex trains found between Bratislava and Košice`);
   const exLeak = exOnly.connections.find(c => !c.trainNumber.startsWith("Ex "));
   assert(exLeak === undefined, `Ex filter leaked: ${exLeak?.trainNumber ?? ""}`);
-  console.log(`count=${exOnly.connections.length}, all start with "Ex ".`);
-
-  // And confirm the filter actually prunes — unfiltered result is bigger.
   assert(
     exOnly.connections.length < direct.connections.length,
     `train_types filter did not shrink the result (unfiltered=${direct.connections.length}, Ex=${exOnly.connections.length})`,
   );
+
+  // === v0.4: via filter ===
+  console.log(`\n=== find_connection (via=Žilina, Bratislava → Košice, ${weekday}) ===`);
+  const viaZilina = findConnection(gtfs, {
+    from: "Bratislava hl.st.",
+    to: "Košice",
+    date: weekday,
+    departureAfter: "00:00",
+    arriveBy: null,
+    operator: null,
+    trainTypes: null,
+    via: "Žilina",
+    wheelchairOnly: false,
+  });
+  assert(viaZilina.status === "ok", `via status: ${viaZilina.status}`);
+  assert(viaZilina.via !== null, `via name not echoed`);
+  assert(
+    viaZilina.via.normalize("NFKD").replace(/\p{Diacritic}/gu, "").toLowerCase().includes("zilina"),
+    `via echo mismatch: got ${viaZilina.via}`,
+  );
+  // Most Ex trains on this route pass through Žilina; we expect at least one
+  // but allow the set to be a strict subset of the unfiltered count.
+  assert(viaZilina.connections.length > 0, `via=Žilina: expected ≥1 connection`);
+  assert(
+    viaZilina.connections.length <= direct.connections.length,
+    `via filter did not shrink or equal the unfiltered result`,
+  );
+  console.log(`count=${viaZilina.connections.length} (unfiltered=${direct.connections.length})`);
+
+  // Unknown via should fail fast with which=via, not expand to everything.
+  const viaTypo = findConnection(gtfs, {
+    from: "Bratislava hl.st.",
+    to: "Košice",
+    date: weekday,
+    departureAfter: "00:00",
+    arriveBy: null,
+    operator: null,
+    trainTypes: null,
+    via: "Atlantida",
+    wheelchairOnly: false,
+  });
+  assert(viaTypo.status === "no_match" && viaTypo.which === "via", `expected no_match/via, got ${viaTypo.status}`);
+
+  // === v0.4: arrive_by gate ===
+  console.log(`\n=== find_connection (arrive_by=12:00, Bratislava → Košice, ${weekday}) ===`);
+  const arriveEarly = findConnection(gtfs, {
+    from: "Bratislava hl.st.",
+    to: "Košice",
+    date: weekday,
+    departureAfter: "00:00",
+    arriveBy: "12:00",
+    operator: null,
+    trainTypes: null,
+    via: null,
+    wheelchairOnly: false,
+  });
+  assert(arriveEarly.status === "ok", `arrive_by status: ${arriveEarly.status}`);
+  const lateArrival = arriveEarly.connections.find(c => c.arrivalTime > "12:00");
+  assert(lateArrival === undefined, `arrive_by=12:00 leaked ${lateArrival?.arrivalTime ?? ""}`);
+  assert(
+    arriveEarly.connections.length < direct.connections.length,
+    `arrive_by=12:00 did not shrink the result (unfiltered=${direct.connections.length}, early=${arriveEarly.connections.length})`,
+  );
+  console.log(`count=${arriveEarly.connections.length}, latest arrival ≤ 12:00`);
+
+  // === v0.4: wheelchair_only filter ===
+  const wheelchairSet = getTimetable(gtfs, {
+    station: "Bratislava hl.st.",
+    date: weekday,
+    limit: 50,
+    operator: null,
+    trainTypes: null,
+    wheelchairOnly: true,
+  });
+  assert(wheelchairSet.status === "ok", `wheelchair_only status: ${wheelchairSet.status}`);
+  const wcLeak = wheelchairSet.departures.find(d => d.wheelchairAccessible !== 1);
+  assert(wcLeak === undefined, `wheelchair_only leaked trip with wheelchairAccessible=${wcLeak?.wheelchairAccessible ?? "?"}`);
+  console.log(`\n=== wheelchair_only (Bratislava hl.st. departures): count=${wheelchairSet.departures.length} ===`);
+
+  // === v0.4: date_out_of_range on every date-taking tool ===
+  const farPast = "2020-01-01";
+  const farFuture = "2030-01-01";
+  const dateOoR = findConnection(gtfs, {
+    from: "Bratislava hl.st.",
+    to: "Košice",
+    date: farPast,
+    departureAfter: "00:00",
+    arriveBy: null,
+    operator: null,
+    trainTypes: null,
+    via: null,
+    wheelchairOnly: false,
+  });
+  assert(dateOoR.status === "date_out_of_range", `far-past direct: expected date_out_of_range, got ${dateOoR.status}`);
+
+  const dateOoRTT = getTimetable(gtfs, {
+    station: "Žilina",
+    date: farFuture,
+    limit: 5,
+    operator: null,
+    trainTypes: null,
+    wheelchairOnly: false,
+  });
+  assert(dateOoRTT.status === "date_out_of_range", `far-future timetable: expected date_out_of_range, got ${dateOoRTT.status}`);
+
+  const dateOoRTransfer = findConnectionWithTransfer(gtfs, {
+    from: "Bratislava hl.st.",
+    to: "Prešov",
+    date: farPast,
+    departureAfter: "00:00",
+    arriveBy: null,
+    operator: null,
+    trainTypes: null,
+    via: null,
+    wheelchairOnly: false,
+  });
+  assert(dateOoRTransfer.status === "date_out_of_range", `far-past transfer: expected date_out_of_range, got ${dateOoRTransfer.status}`);
+
+  const dateOoRTrip = findTripByNumber(gtfs, {
+    trainNumber: "Ex 603",
+    date: farPast,
+    wheelchairOnly: false,
+  });
+  assert(dateOoRTrip.status === "date_out_of_range", `far-past trip: expected date_out_of_range, got ${dateOoRTrip.status}`);
 
   // === find_connection_with_transfer ===
   console.log(`\n=== find_connection_with_transfer  (Bratislava → Prešov, ${weekday}) ===`);
@@ -166,8 +291,11 @@ async function main(): Promise<void> {
     to: "Prešov",
     date: weekday,
     departureAfter: "06:00",
+    arriveBy: null,
     operator: null,
     trainTypes: null,
+    via: null,
+    wheelchairOnly: false,
   });
   assert(transfers.status === "ok", `transfers status: ${transfers.status}`);
   if (transfers.itineraries.length > 0) {
@@ -179,13 +307,13 @@ async function main(): Promise<void> {
   }
 
   // === get_timetable ===
-  console.log(`\n=== get_timetable  (Žilina, ${todayIso()}, limit 5) ===`);
   const timetable = getTimetable(gtfs, {
     station: "Žilina",
     date: todayIso(),
     limit: 5,
     operator: null,
     trainTypes: null,
+    wheelchairOnly: false,
   });
   assert(timetable.status === "ok", `get_timetable status: ${timetable.status}`);
   assert(timetable.departures.length >= 1, `get_timetable returned no departures`);
@@ -197,6 +325,7 @@ async function main(): Promise<void> {
     limit: 5,
     operator: "RegioJet",
     trainTypes: null,
+    wheelchairOnly: false,
   });
   assert(rj.status === "ok", `get_timetable(operator=RegioJet) status: ${rj.status}`);
   const rjLeak = rj.departures.find(d => d.agency !== REGIOJET_NAME);
@@ -204,14 +333,13 @@ async function main(): Promise<void> {
 
   // === find_trip_by_number ===
   console.log(`\n=== find_trip_by_number  ("Ex 603", ${weekday}) ===`);
-  const byNumber = findTripByNumber(gtfs, { trainNumber: "Ex 603", date: weekday });
+  const byNumber = findTripByNumber(gtfs, { trainNumber: "Ex 603", date: weekday, wheelchairOnly: false });
   assert(byNumber.status === "ok", `find_trip_by_number status: ${byNumber.status}`);
   assert(byNumber.trips.length >= 1, `no trips for Ex 603`);
   const trip0 = byNumber.trips[0];
   assert(trip0 !== undefined, "trip[0] present");
   assert(trip0.trainNumber === "Ex 603", `wrong trainNumber: ${trip0.trainNumber}`);
   assert(trip0.stops.length >= 5, `Ex 603 has suspiciously few stops: ${trip0.stops.length}`);
-  // Stop sequence must be monotonically increasing by construction.
   for (let i = 1; i < trip0.stops.length; i++) {
     const prev = trip0.stops[i - 1];
     const curr = trip0.stops[i];
@@ -220,8 +348,7 @@ async function main(): Promise<void> {
   }
   console.log(`trips=${byNumber.trips.length}, stops on trip[0]=${trip0.stops.length}: ${trip0.stops[0]?.stopName} → ${trip0.stops[trip0.stops.length - 1]?.stopName}`);
 
-  // Unknown number → no_match
-  const unknownTrip = findTripByNumber(gtfs, { trainNumber: "XX 99999", date: weekday });
+  const unknownTrip = findTripByNumber(gtfs, { trainNumber: "XX 99999", date: weekday, wheelchairOnly: false });
   assert(unknownTrip.status === "no_match", `expected no_match, got ${unknownTrip.status}`);
 
   // === find_stations_nearby ===
@@ -237,7 +364,6 @@ async function main(): Promise<void> {
   assert(closest !== undefined, "closest present");
   assert(closest.stopName.toLowerCase().includes("bratislava"), `closest station not a Bratislava stop: ${closest.stopName}`);
   assert(closest.distanceKm < 0.5, `closest BA station further than 0.5 km: ${closest.distanceKm} km`);
-  // Distances must be monotonically non-decreasing (sorted by distance asc).
   for (let i = 1; i < nearby.stations.length; i++) {
     const prev = nearby.stations[i - 1];
     const curr = nearby.stations[i];
@@ -246,22 +372,30 @@ async function main(): Promise<void> {
   }
   console.log(`count=${nearby.stations.length}, closest=${closest.stopName} (${closest.distanceKm} km)`);
 
-  // Invalid coordinates → invalid_coordinates
   const badCoords = findStationsNearby(gtfs, { lat: 999, lon: 0, radiusKm: 5 });
   assert(badCoords.status === "invalid_coordinates", `expected invalid_coordinates, got ${badCoords.status}`);
+
+  // === v0.4: feed-info snapshot (also served via zssk://feed/info resource) ===
+  const info = buildFeedInfo(gtfs);
+  assert(info.feedVersion === gtfs.feedVersion, `feedInfo.version mismatch`);
+  assert(info.agencies.length === gtfs.agenciesById.size, `feedInfo agency count mismatch`);
+  assert(info.counts.stops === gtfs.stopsById.size, `feedInfo counts.stops mismatch`);
+  console.log(`\n=== feed-info snapshot: version=${info.feedVersion}, agencies=${info.agencies.length}, warning=${info.warning?.severity ?? "none"} ===`);
 
   // === check_delay (stub) ===
   const delay = checkDelay({ trainNumber: "Ex 42" });
   assert(delay.status === "not_implemented", `check_delay should be stubbed`);
 
-  // === operator error path ===
   const bogus = findConnection(gtfs, {
     from: "Bratislava hl.st.",
     to: "Košice",
     date: weekday,
     departureAfter: "00:00",
+    arriveBy: null,
     operator: "NoSuchOperator",
     trainTypes: null,
+    via: null,
+    wheelchairOnly: false,
   });
   assert(bogus.status === "no_match_operator", `expected no_match_operator, got ${bogus.status}`);
 
