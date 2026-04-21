@@ -17,6 +17,8 @@ import { nextDeparturesFrom } from "../src/use-cases/next-departures-from.js";
 import { getTripGeojson } from "../src/use-cases/get-trip-geojson.js";
 import { compareTrips } from "../src/use-cases/compare-trips.js";
 import { findReachableStations } from "../src/use-cases/find-reachable-stations.js";
+import { renderTripMap } from "../src/use-cases/render-trip-map.js";
+import { renderReachableMap } from "../src/use-cases/render-reachable-map.js";
 import { getTimetable } from "../src/use-cases/get-timetable.js";
 import { checkDelay } from "../src/use-cases/check-delay.js";
 import { resolveAgencies } from "../src/use-cases/resolve-agency.js";
@@ -781,6 +783,52 @@ async function main(): Promise<void> {
     `max_transfers=1 should reach at least as many stations as direct`,
   );
   console.log(`  ${reachWithTransfer.stations.length} stations within 180 min (up to 1 transfer)`);
+
+  // === v0.8: render_trip_map — SVG route map ===
+  console.log(`\n=== render_trip_map (Ex 603 trip) ===`);
+  const tripMap = renderTripMap(gtfs, { tripId: trip0.tripId, date: weekday });
+  assert(tripMap.status === "ok", `render_trip_map status: ${tripMap.status}`);
+  assert(tripMap.svg.startsWith("<svg "), `svg doesn't start with <svg`);
+  assert(tripMap.svg.endsWith("</svg>"), `svg doesn't close properly`);
+  assert(tripMap.svg.includes("<polyline"), `svg missing route polyline`);
+  assert(tripMap.svg.includes("<circle"), `svg missing stop circles`);
+  assert(tripMap.svg.includes("Bratislava"), `svg missing origin label`);
+  assert(tripMap.svg.includes("Košice"), `svg missing destination label`);
+  // Ex route color from routes.txt is FF671F — verify it's picked up.
+  assert(tripMap.svg.includes("#FF671F"), `svg missing route_color FF671F`);
+  // No unescaped `&` — SVG treats raw ampersand as error.
+  const badAmp = /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;)/.test(tripMap.svg);
+  assert(!badAmp, `svg contains unescaped ampersand`);
+  assert(tripMap.summary.stops >= 5, `summary.stops too small`);
+  console.log(`  svg bytes=${tripMap.svg.length}, routeColor=${tripMap.summary.routeColor ?? "default"}, stops=${tripMap.summary.stops}`);
+
+  const badTripMap = renderTripMap(gtfs, { tripId: "99999999", date: weekday });
+  assert(badTripMap.status === "trip_not_found", `expected trip_not_found, got ${badTripMap.status}`);
+
+  // === v0.8: render_reachable_map — isochrone SVG ===
+  console.log(`\n=== render_reachable_map (Bratislava hl.st., ±90 min, direct) ===`);
+  const reachMap = renderReachableMap(gtfs, {
+    from: "Bratislava hl.st.",
+    date: weekday,
+    departureAfter: "06:00",
+    withinMinutes: 90,
+    maxTransfers: 0,
+  });
+  assert(reachMap.status === "ok", `render_reachable_map status: ${reachMap.status}`);
+  assert(reachMap.svg.startsWith("<svg "), `reach svg not <svg>`);
+  assert(reachMap.svg.includes("linearGradient"), `legend gradient missing`);
+  assert(reachMap.svg.includes("<circle"), `no station dots drawn`);
+  assert(reachMap.svg.includes("Bratislava hl.st."), `origin label missing`);
+  // HSL interpolation must appear at least once (one station colored).
+  assert(/hsl\(\d+,70%,45%\)/.test(reachMap.svg), `no HSL-colored station dots`);
+  assert(reachMap.summary.plotted > 5, `plotted too small: ${reachMap.summary.plotted}`);
+  console.log(`  svg bytes=${reachMap.svg.length}, plotted=${reachMap.summary.plotted}, unplottable=${reachMap.summary.unplottable}`);
+
+  // Write both SVGs to /tmp so a human can eyeball them if they want.
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync("/tmp/zssk-trip-map.svg", tripMap.svg);
+  writeFileSync("/tmp/zssk-reach-map.svg", reachMap.svg);
+  console.log(`  wrote /tmp/zssk-trip-map.svg and /tmp/zssk-reach-map.svg`);
 
   // === operator error path ===
   const bogus = findConnection(

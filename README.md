@@ -71,6 +71,8 @@ This is a personal pet project — no production infra, no real-time delays in v
 | `get_trip_geojson`              | GeoJSON Feature (LineString) of a trip's path for map rendering.             | v7      |
 | `compare_trips`                 | Side-by-side comparison of 2–5 trips on one date.                            | v7      |
 | `find_reachable_stations`       | Stations reachable within N minutes (direct, optionally with 1 transfer).    | v7      |
+| `render_trip_map`               | Self-contained SVG map of a trip's route (uses GTFS `route_color`).          | v8      |
+| `render_reachable_map`          | Isochrone-style SVG: dots colored green→red by travel time from origin.      | v8      |
 | `check_delay`                   | Real-time delay lookup. Returns `not_implemented` — pending source decision. | v1 stub |
 
 All query tools are marked `readOnly`, non-destructive, idempotent, and
@@ -137,6 +139,34 @@ tool just to get the feed's validity window.
 The same payload is also exposed as a **`get_feed_info` tool** (v5) — some
 MCP clients (including Claude Code) don't surface resources as callable
 endpoints to the agent, so the tool mirror is the reliable path.
+
+### SVG map rendering (v8)
+
+Two tools return self-contained SVG maps — no external tile servers, no
+internet required, rendered inline by MCP clients that support
+`image/svg+xml` (Claude Desktop does; plain-text clients get the SVG in
+the text payload as a fallback).
+
+- **`render_trip_map(trip_id, date)`** — geographic map of one trip's
+  path. Station coordinates projected with equirectangular + cos(lat)
+  correction. Route polyline uses the `route_color` from `routes.txt`
+  when set (ZSSK populates it — Ex/TATRAN is `#FF671F`, etc.).
+  Endpoints get full station-name labels; intermediate stops get time
+  labels staggered above/below to avoid collisions, and the station
+  name lives in the SVG `<title>` tooltip.
+- **`render_reachable_map(from, date, within_minutes, max_transfers)`** —
+  isochrone-style map. Origin ringed in dark, reachable stations as dots
+  colored on an HSL scale (green=fast → red=slow) relative to the
+  budget. Transfer-reached stations carry a `via …` line in their
+  tooltip. A small gradient legend sits in the bottom-right.
+
+The SVG is returned as **both** an `image/svg+xml` content item and a
+text payload carrying `{ status, svg, summary }`. To eyeball locally:
+
+```bash
+npm run smoke
+open /tmp/zssk-trip-map.svg /tmp/zssk-reach-map.svg
+```
 
 ### Reachability and maps (v7)
 
@@ -479,6 +509,9 @@ src/
     get-trip-geojson.ts            (v7: GeoJSON LineString for maps)
     compare-trips.ts               (v7: 2–5 trips side-by-side)
     find-reachable-stations.ts     (v7: direct + 1-transfer BFS)
+    svg-projection.ts              (v8: shared equirectangular + svgEscape)
+    render-trip-map.ts             (v8: SVG route map)
+    render-reachable-map.ts        (v8: SVG isochrone-style reach map)
     find-connection.ts
     find-connection-with-transfer.ts
     find-trip-by-number.ts

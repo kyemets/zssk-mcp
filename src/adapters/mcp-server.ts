@@ -16,6 +16,8 @@ import { nextDeparturesFrom } from "../use-cases/next-departures-from.js";
 import { getTripGeojson } from "../use-cases/get-trip-geojson.js";
 import { compareTrips } from "../use-cases/compare-trips.js";
 import { findReachableStations } from "../use-cases/find-reachable-stations.js";
+import { renderTripMap } from "../use-cases/render-trip-map.js";
+import { renderReachableMap } from "../use-cases/render-reachable-map.js";
 import { getTimetable } from "../use-cases/get-timetable.js";
 import { checkDelay } from "../use-cases/check-delay.js";
 import { getFeedWarning, buildFeedInfo } from "../use-cases/feed-status.js";
@@ -68,7 +70,7 @@ const READ_ONLY_ANNOTATIONS = {
 } as const;
 
 export function createMcpServer(gtfs: GtfsIndex): McpServer {
-  const server = new McpServer({ name: "zssk-mcp", version: "0.7.0" });
+  const server = new McpServer({ name: "zssk-mcp", version: "0.8.0" });
 
   server.registerTool(
     "find_connection",
@@ -531,6 +533,59 @@ export function createMcpServer(gtfs: GtfsIndex): McpServer {
   );
 
   server.registerTool(
+    "render_trip_map",
+    {
+      title: "Render a trip as an SVG map",
+      description:
+        "Produce a self-contained SVG map of the trip's geographic path. Station " +
+        "coordinates are projected with equirectangular + cos(lat) correction. The " +
+        "route line uses the GTFS `route_color` when set (ZSSK populates it for " +
+        "TATRAN / KRIVÁŇ etc.), otherwise a default. Endpoints get full labels, " +
+        "intermediates get time only in a staggered placement to avoid collisions. " +
+        "Response includes both an `image` content item (mimeType=image/svg+xml) and " +
+        "a `text` item with the raw SVG + structured summary for clients that don't " +
+        "render SVG inline.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        trip_id: z.string().min(1).describe("GTFS trip_id (from a prior connection/trip result)."),
+        date: z.string().regex(DATE_REGEX).describe("Service date YYYY-MM-DD."),
+      },
+    },
+    async (args) => respondWithSvg(gtfs, renderTripMap(gtfs, {
+      tripId: args.trip_id,
+      date: args.date,
+    })),
+  );
+
+  server.registerTool(
+    "render_reachable_map",
+    {
+      title: "Render reachable stations as an SVG isochrone map",
+      description:
+        "Run find_reachable_stations and render the result as a dot map. The origin is " +
+        "marked with a bold ring; each reachable station is a colored dot (green=fast, " +
+        "red=slow on a linear HSL scale from 0 to within_minutes). Stations reached " +
+        "with a transfer are visually identical to direct ones — the `via` info is in " +
+        "the per-dot tooltip. Response mirrors render_trip_map: both image and text.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        from: z.string().min(1).describe("Origin station name (fuzzy matched)."),
+        date: z.string().regex(DATE_REGEX).describe("Date YYYY-MM-DD."),
+        departure_after: z.string().regex(TIME_REGEX).optional().describe("Earliest departure HH:MM. Default 00:00."),
+        within_minutes: z.number().int().min(10).max(480).optional().describe("Travel-time budget in minutes. Default 120."),
+        max_transfers: z.union([z.literal(0), z.literal(1)]).optional().describe("0 = direct only, 1 = allow one change."),
+      },
+    },
+    async (args) => respondWithSvg(gtfs, renderReachableMap(gtfs, {
+      from: args.from,
+      date: args.date,
+      departureAfter: args.departure_after ?? "00:00",
+      withinMinutes: args.within_minutes ?? 120,
+      maxTransfers: args.max_transfers ?? 0,
+    })),
+  );
+
+  server.registerTool(
     "check_delay",
     {
       title: "Check train delay (stub)",
@@ -580,6 +635,31 @@ function respond(gtfs: GtfsIndex, result: object) {
       { type: "text" as const, text: JSON.stringify(payload, null, 2) },
     ],
   };
+}
+
+// SVG-returning tools: attach BOTH the structured payload (for reasoning)
+// AND the raw SVG as an image content item (for inline rendering in
+// capable clients). Clients that don't render image/svg+xml fall back to
+// the text payload which still contains the SVG string.
+function respondWithSvg<T extends { status: string } & { svg?: string }>(
+  gtfs: GtfsIndex,
+  result: T,
+) {
+  const warning = getFeedWarning(gtfs);
+  const payload = warning ? { ...result, _feed_warning: warning } : result;
+  const text = {
+    type: "text" as const,
+    text: JSON.stringify(payload, null, 2),
+  };
+  if (result.status !== "ok" || !result.svg) {
+    return { content: [text] };
+  }
+  const image = {
+    type: "image" as const,
+    data: Buffer.from(result.svg, "utf8").toString("base64"),
+    mimeType: "image/svg+xml",
+  };
+  return { content: [image, text] };
 }
 
 export async function startStdio(server: McpServer): Promise<void> {

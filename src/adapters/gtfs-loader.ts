@@ -151,9 +151,18 @@ function parseRoutes(): Map<string, Route> {
       shortName: r.route_short_name ?? "",
       longName: r.route_long_name ?? "",
       type: r.route_type ?? "",
+      color: r.route_color ? normalizeHex(r.route_color) : null,
+      textColor: r.route_text_color ? normalizeHex(r.route_text_color) : null,
     });
   }
   return map;
+}
+
+// GTFS allows bare six-hex, but some feeds wrap with `#` or pad with spaces.
+// Normalize to uppercase six-char hex without the hash. Return null on garbage.
+function normalizeHex(raw: string): string | null {
+  const cleaned = raw.trim().replace(/^#/, "").toUpperCase();
+  return /^[0-9A-F]{6}$/.test(cleaned) ? cleaned : null;
 }
 
 // Invariant: each byTrip bucket is sorted by stop_sequence — downstream code
